@@ -45,11 +45,29 @@ def cli(verbose: bool) -> None:
 # score  — run diagnostics for a single model simulation
 # ---------------------------------------------------------------------------
 @cli.command()
-@click.option("--model",      required=True,  help="CMIP6 source_id, e.g. CESM2")
+# --- Data source: local directory (takes priority if provided) ---
+@click.option("--data-dir",   default=None, type=click.Path(exists=True),
+              help="Local directory of NetCDF files to score. "
+                   "Mutually exclusive with --model/--experiment/--member.")
+@click.option("--name-map",   default=None, type=str,
+              help="JSON string mapping local variable names to CMIP6 names, "
+                   'e.g. \'{"TMQ": "prw", "LHFLX": "hfls"}\'. '
+                   "Only needed if auto-detection fails.")
+# --- Data source: CMIP6 GCS ---
+@click.option("--model",      default=None,
+              help="CMIP6 source_id for GCS access, e.g. CESM2. "
+                   "Required if --data-dir is not provided.")
 @click.option("--experiment", default="historical", show_default=True,
               help="CMIP6 experiment_id")
 @click.option("--member",     default="r1i1p1f1", show_default=True,
               help="CMIP6 member_id (ripf label)")
+# --- Optional: benchmark/reference model from CMIP6 GCS for comparison ---
+@click.option("--benchmark-model",  default=None,
+              help="CMIP6 source_id to use as the reference/benchmark run "
+                   "(fetched from GCS). Produces a side-by-side improvement/degradation report.")
+@click.option("--benchmark-member", default="r1i1p1f1", show_default=True,
+              help="Member ID for the benchmark CMIP6 model.")
+# --- Common options ---
 @click.option("--year-start", default=1995, show_default=True, type=int,
               help="Start year of analysis period (inclusive)")
 @click.option("--year-end",   default=2014, show_default=True, type=int,
@@ -57,22 +75,42 @@ def cli(verbose: bool) -> None:
 @click.option("--output",     required=True, type=click.Path(),
               help="Output directory for scores JSON and diagnostic plots")
 @click.option("--obs-dir",    default=None, type=click.Path(exists=True),
-              help="Override path to observational reference data")
+              help="Override path to observational reference data "
+                   "(default: data/obs/ relative to repo root)")
 @click.option("--no-plots",   is_flag=True, default=False,
-              help="Skip generating diagnostic map plots (faster)")
+              help="Skip generating diagnostic map plots (faster for batch runs)")
 @click.option("--clobber",    is_flag=True, default=False,
               help="Recompute even if cached results exist")
 def score(
-    model, experiment, member, year_start, year_end,
-    output, obs_dir, no_plots, clobber
+    data_dir, name_map, model, experiment, member,
+    benchmark_model, benchmark_member,
+    year_start, year_end, output, obs_dir, no_plots, clobber
 ) -> None:
     """
     Compute CMAT scores for a single model simulation.
 
-    Fetches data from the CMIP6 GCS mirror via intake-esm, computes the 16
-    diagnostic variables across three timescales, runs pattern correlations
-    against observations, and writes results as JSON + PNG figures.
+    \b
+    Data source (choose one):
+      --data-dir   Score a local directory of NetCDF files (dev runs, post-
+                   processed history files, any format auto-detected).
+      --model      Fetch from the CMIP6 GCS mirror via intake-esm.
+
+    \b
+    Optionally compare against a CMIP6 reference:
+      --benchmark-model CESM2   Fetch the benchmark from GCS and report
+                                improvements/degradations vs. the scored run.
+
+    Results are written as scores.json plus PNG diagnostic plots.
     """
+    if data_dir is None and model is None:
+        raise click.UsageError(
+            "Provide either --data-dir (local NetCDF) or --model (CMIP6 GCS)."
+        )
+    if data_dir is not None and model is not None:
+        raise click.UsageError(
+            "--data-dir and --model are mutually exclusive."
+        )
+
     output_path = Path(output)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -81,19 +119,41 @@ def score(
         log.info("Scores file already exists: %s (use --clobber to recompute)", scores_file)
         return
 
-    log.info("Scoring %s %s %s (%d-%d)", model, experiment, member, year_start, year_end)
+    year_range = (year_start, year_end)
 
-    # Phase 1: load data  (to be implemented in src/data_loading.py)
-    # Phase 2: compute derived variables  (src/derived_vars.py)
-    # Phase 3: compute climatologies  (src/climatology.py)
-    # Phase 4: regrid to 1-deg  (src/regrid.py)
-    # Phase 5: pattern correlations  (src/pattern_cor.py)
-    # Phase 6: compute scores  (src/scoring.py)
-    # Phase 7: write JSON output
-    # Phase 8: generate plots  (src/plots.py)
+    # Build the primary data loader
+    from src.data_loader import CmatLoader
+    if data_dir is not None:
+        extra_map = json.loads(name_map) if name_map else None
+        run_label = Path(data_dir).name
+        log.info("Scoring local run: %s (%d-%d)", data_dir, *year_range)
+        loader = CmatLoader.from_local(data_dir, year_range=year_range, name_map=extra_map)
+    else:
+        run_label = f"{model}_{member}"
+        log.info("Scoring CMIP6: %s %s %s (%d-%d)", model, experiment, member, *year_range)
+        loader = CmatLoader.from_cmip6(model, experiment, member, year_range=year_range)
+
+    # Optionally build a benchmark loader for comparison
+    benchmark_loader = None
+    if benchmark_model:
+        log.info("Benchmark: CMIP6 %s %s (%d-%d)", benchmark_model, benchmark_member, *year_range)
+        benchmark_loader = CmatLoader.from_cmip6(
+            benchmark_model, experiment, benchmark_member, year_range=year_range
+        )
+
+    # Pipeline (to be implemented):
+    # 1. Load component fields via loader.load(var)
+    # 2. Compute derived variables  (src/derived_vars.py)
+    # 3. Regrid to 1-deg            (src/regrid.py)
+    # 4. Compute climatologies      (src/climatology.py)
+    # 5. Pattern correlations vs obs (src/pattern_cor.py)
+    # 6. Compute scores              (src/scoring.py)
+    # 7. If benchmark_loader: also score benchmark, flag improvements/degradations
+    # 8. Write scores.json
+    # 9. Generate plots unless --no-plots  (src/plots.py)
 
     raise NotImplementedError(
-        "score command: data loading and scoring pipeline not yet implemented"
+        "score command: scoring pipeline not yet implemented (data_loader is ready)"
     )
 
 

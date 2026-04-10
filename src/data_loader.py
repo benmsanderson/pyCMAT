@@ -1,0 +1,347 @@
+"""
+data_loader.py — Unified data access layer for pyCMAT.
+
+Supports two backends, both returning xarray Datasets with consistent
+coordinate names (lat, lon, time, plev where applicable):
+
+  1. Local NetCDF backend
+     Loads monthly model output from a local directory.  Files can be:
+       - One file per variable: pr_195001-201412.nc
+       - All variables in one file: model_Amon_1995-2014.nc
+       - CESM history file layout: casename.cam.h0.YYYY-MM.nc
+     Variable discovery uses CF standard_name attributes, then falls back
+     to a configurable name mapping.
+
+  2. CMIP6 GCS backend
+     Queries the Pangeo intake-esm catalog and streams data lazily via Zarr.
+     Named CMIP6 variables are returned directly; no local download required
+     unless explicitly requested.
+
+Usage
+-----
+# Local directory
+loader = CmatLoader.from_local("/path/to/model/output", year_range=(1995, 2014))
+
+# CMIP6 GCS
+loader = CmatLoader.from_cmip6("CESM2", experiment="historical",
+                                member="r1i1p1f1", year_range=(1995, 2014))
+
+# Load a specific variable (returns xr.DataArray)
+pr = loader.load("pr")
+zg = loader.load("zg")   # full 3D field; extract level in derived_vars.py
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Sequence
+
+import numpy as np
+import xarray as xr
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# CF standard_name -> CMAT/CMIP6 variable_id mapping
+# Used to identify variables in local files that don't follow CMIP6 naming.
+# ---------------------------------------------------------------------------
+CF_STANDARD_NAME_MAP = {
+    "precipitation_flux": "pr",
+    "atmosphere_mass_content_of_water_vapor": "prw",
+    "relative_humidity": "hur",    # disambiguate by level downstream
+    "surface_air_pressure": "ps",
+    "air_pressure_at_mean_sea_level": "psl",
+    "surface_upward_latent_heat_flux": "hfls",
+    "surface_upward_sensible_heat_flux": "hfss",
+    "toa_outgoing_longwave_flux": "rlut",
+    "toa_outgoing_shortwave_flux": "rsut",
+    "toa_incoming_shortwave_flux": "rsdt",
+    "surface_downwelling_shortwave_flux_in_air": "rsds",
+    "surface_upwelling_shortwave_flux_in_air": "rsus",
+    "surface_downwelling_longwave_flux_in_air": "rlds",
+    "surface_upwelling_longwave_flux_in_air": "rlus",
+    "wind_speed": "sfcWind",
+    "geopotential": "zg",
+    "lagrangian_tendency_of_air_pressure": "wap",
+    "near_surface_relative_humidity": "hurs",
+    "sea_surface_temperature": "ts",
+    "surface_temperature": "ts",
+}
+
+# Common non-CF variable name aliases used in CESM history files and others
+ALIAS_MAP = {
+    # CESM CAM names -> CMIP6 names
+    "PRECC": None,    # convective precip - not directly usable alone
+    "PRECL": None,    # large-scale precip - combine with PRECC for pr
+    "TMQ": "prw",
+    "LHFLX": "hfls",
+    "SHFLX": "hfss",
+    "FLUT": "rlut",
+    "FLUTC": "rlutcs",
+    "FSNTOA": "rsnt",  # net SW at TOA  (already derived)
+    "FSUTOA": "rsut",
+    "FSUTOAC": "rsutcs",
+    "SOLIN": "rsdt",
+    "Z3": "zg",
+    "OMEGA": "wap",
+    "RELHUM": "hur",
+    "PSL": "psl",
+    "U10": "sfcWind",
+    "TS": "ts",
+    "FSDS": "rsds",
+    "FSUS": "rsus",
+    "FLDS": "rlds",
+    "FLUS": "rlus",
+}
+
+
+class CmatLoader:
+    """
+    Unified loader that provides a consistent xr.DataArray for any CMAT variable,
+    regardless of the data source (local files or CMIP6 GCS).
+    """
+
+    def __init__(self, backend: str, year_range: tuple[int, int] = (1995, 2014)):
+        self.backend = backend           # 'local' or 'cmip6'
+        self.year_range = year_range
+        self._catalog = None            # intake-esm catalog (cmip6 backend)
+        self._local_dir: Path | None = None
+        self._local_ds_cache: dict[str, xr.Dataset] = {}
+        # CMIP6 identifiers (cmip6 backend)
+        self.source_id: str | None = None
+        self.experiment_id: str | None = None
+        self.member_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # Constructors
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_local(
+        cls,
+        data_dir: str | Path,
+        year_range: tuple[int, int] = (1995, 2014),
+        name_map: dict | None = None,
+    ) -> "CmatLoader":
+        """
+        Create a loader backed by a local directory of NetCDF files.
+
+        Parameters
+        ----------
+        data_dir : str or Path
+            Directory containing monthly NetCDF files.
+        year_range : (start_year, end_year)
+            Inclusive year range to extract after loading.
+        name_map : dict or None
+            Optional {local_varname: cmip6_varname} overrides, applied on top
+            of the built-in CF standard_name and alias mappings.
+        """
+        loader = cls(backend="local", year_range=year_range)
+        loader._local_dir = Path(data_dir)
+        if not loader._local_dir.is_dir():
+            raise FileNotFoundError(f"data_dir does not exist: {data_dir}")
+        if name_map:
+            ALIAS_MAP.update(name_map)
+        log.info("Local loader initialised: %s (%d-%d)", data_dir, *year_range)
+        return loader
+
+    @classmethod
+    def from_cmip6(
+        cls,
+        source_id: str,
+        experiment_id: str = "historical",
+        member_id: str = "r1i1p1f1",
+        year_range: tuple[int, int] = (1995, 2014),
+        catalog_url: str = "https://storage.googleapis.com/cmip6/pangeo-cmip6.json",
+    ) -> "CmatLoader":
+        """
+        Create a loader backed by the Pangeo CMIP6 GCS intake-esm catalog.
+
+        Parameters
+        ----------
+        source_id : str
+            CMIP6 model name, e.g. 'CESM2'.
+        experiment_id : str
+            CMIP6 experiment, e.g. 'historical'.
+        member_id : str
+            CMIP6 ripf label, e.g. 'r1i1p1f1'.
+        year_range : (start_year, end_year)
+            Inclusive year range to extract after loading.
+        catalog_url : str
+            URL of the intake-esm JSON catalog descriptor.
+        """
+        try:
+            import intake
+        except ImportError as e:
+            raise ImportError(
+                "intake-esm is required for CMIP6 GCS access. "
+                "Run: pip install intake-esm gcsfs ipython"
+            ) from e
+
+        loader = cls(backend="cmip6", year_range=year_range)
+        loader.source_id = source_id
+        loader.experiment_id = experiment_id
+        loader.member_id = member_id
+        log.info("Opening intake-esm catalog: %s", catalog_url)
+        loader._catalog = intake.open_esm_datastore(catalog_url)
+        log.info("CMIP6 loader initialised: %s %s %s (%d-%d)",
+                 source_id, experiment_id, member_id, *year_range)
+        return loader
+
+    # ------------------------------------------------------------------
+    # Public load interface
+    # ------------------------------------------------------------------
+
+    def load(self, cmat_var: str) -> xr.DataArray:
+        """
+        Load a variable and return it as an xr.DataArray with standardised
+        coordinate names (lat, lon, time; plev if 3D) sliced to year_range.
+
+        Parameters
+        ----------
+        cmat_var : str
+            CMAT/CMIP6 variable name, e.g. 'pr', 'zg', 'rlut'.
+
+        Returns
+        -------
+        xr.DataArray with dims (time, lat, lon) or (time, plev, lat, lon).
+        """
+        if self.backend == "local":
+            da = self._load_local(cmat_var)
+        elif self.backend == "cmip6":
+            da = self._load_cmip6(cmat_var)
+        else:
+            raise ValueError(f"Unknown backend: {self.backend}")
+
+        da = self._standardise_coords(da)
+        da = self._slice_years(da)
+        return da
+
+    # ------------------------------------------------------------------
+    # Local backend
+    # ------------------------------------------------------------------
+
+    def _load_local(self, cmat_var: str) -> xr.DataArray:
+        """
+        Search the local directory for a file containing cmat_var.
+
+        Search order:
+          1. File whose stem matches the variable name (case-insensitive)
+          2. Any NetCDF file containing a variable whose CF standard_name maps
+             to cmat_var
+          3. Any NetCDF file containing a variable whose name matches an alias
+             in ALIAS_MAP
+          4. A single NetCDF file in the directory (assumed to contain everything)
+        """
+        nc_files = sorted(self._local_dir.glob("*.nc")) + \
+                   sorted(self._local_dir.glob("**/*.nc"))
+
+        if not nc_files:
+            raise FileNotFoundError(
+                f"No .nc files found under {self._local_dir}"
+            )
+
+        # 1. Stem match
+        for f in nc_files:
+            if cmat_var.lower() in f.stem.lower():
+                ds = self._open_and_cache(f)
+                if cmat_var in ds:
+                    return ds[cmat_var]
+
+        # 2 & 3. Scan all files for matching variables
+        for f in nc_files:
+            ds = self._open_and_cache(f)
+            # CF standard_name scan
+            for vname, var in ds.data_vars.items():
+                std = var.attrs.get("standard_name", "")
+                if CF_STANDARD_NAME_MAP.get(std) == cmat_var:
+                    log.debug("Found %s in %s as '%s' (CF standard_name)", cmat_var, f.name, vname)
+                    return ds[vname].rename(cmat_var)
+            # Alias scan
+            for alias, mapped in ALIAS_MAP.items():
+                if mapped == cmat_var and alias in ds:
+                    log.debug("Found %s in %s as alias '%s'", cmat_var, f.name, alias)
+                    return ds[alias].rename(cmat_var)
+
+        raise KeyError(
+            f"Variable '{cmat_var}' not found in any file under {self._local_dir}. "
+            f"Add an entry to ALIAS_MAP or use a --name-map override."
+        )
+
+    def _open_and_cache(self, path: Path) -> xr.Dataset:
+        key = str(path)
+        if key not in self._local_ds_cache:
+            log.debug("Opening %s", path)
+            self._local_ds_cache[key] = xr.open_dataset(path, chunks="auto", use_cftime=True)
+        return self._local_ds_cache[key]
+
+    # ------------------------------------------------------------------
+    # CMIP6 GCS backend
+    # ------------------------------------------------------------------
+
+    def _load_cmip6(self, cmat_var: str) -> xr.DataArray:
+        """Query intake-esm catalog and return the requested variable as DataArray."""
+        subset = self._catalog.search(
+            source_id=self.source_id,
+            experiment_id=self.experiment_id,
+            member_id=self.member_id,
+            variable_id=cmat_var,
+            table_id="Amon",
+        )
+
+        if len(subset.df) == 0:
+            # Try pressure-level tables for 3D fields
+            subset = self._catalog.search(
+                source_id=self.source_id,
+                experiment_id=self.experiment_id,
+                member_id=self.member_id,
+                variable_id=cmat_var,
+            )
+
+        if len(subset.df) == 0:
+            raise KeyError(
+                f"Variable '{cmat_var}' not found in CMIP6 catalog for "
+                f"{self.source_id} {self.experiment_id} {self.member_id}"
+            )
+
+        # Prefer Amon if multiple tables available
+        if "Amon" in subset.df["table_id"].values:
+            subset = subset.search(table_id="Amon")
+
+        log.info("Loading %s from CMIP6 GCS (%s %s %s)",
+                 cmat_var, self.source_id, self.experiment_id, self.member_id)
+
+        dsets = subset.to_dataset_dict(
+            xarray_open_kwargs={"chunks": "auto", "use_cftime": True},
+            progressbar=False,
+        )
+        # to_dataset_dict returns {key: Dataset}; pick first entry
+        ds = next(iter(dsets.values()))
+        return ds[cmat_var]
+
+    # ------------------------------------------------------------------
+    # Coordinate standardisation helpers
+    # ------------------------------------------------------------------
+
+    def _standardise_coords(self, da: xr.DataArray) -> xr.DataArray:
+        """Rename non-standard coordinate names to lat/lon/time/plev."""
+        rename = {}
+        for dim in da.dims:
+            dl = dim.lower()
+            if dl in ("latitude", "nav_lat", "lat_0"):
+                rename[dim] = "lat"
+            elif dl in ("longitude", "nav_lon", "lon_0"):
+                rename[dim] = "lon"
+            elif dl in ("lev", "level", "pressure", "pressure_level", "plev"):
+                rename[dim] = "plev"
+        if rename:
+            da = da.rename(rename)
+        # Ensure lat increases south to north
+        if "lat" in da.dims and da.lat.values[0] > da.lat.values[-1]:
+            da = da.isel(lat=slice(None, None, -1))
+        return da
+
+    def _slice_years(self, da: xr.DataArray) -> xr.DataArray:
+        """Subset to the configured year_range (inclusive)."""
+        y0, y1 = self.year_range
+        return da.sel(time=slice(str(y0), str(y1)))

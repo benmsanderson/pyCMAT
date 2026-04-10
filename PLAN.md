@@ -10,12 +10,46 @@ three physical realms (energy budget, water cycle, dynamics).
 
 ---
 
+## Primary Use Cases
+
+1. **Score a local model run against observations** — the main development workflow.
+   A local directory of NetCDF files (e.g., from a dev build or post-processed
+   history files) is scored directly against the observational reference datasets.
+
+   ```
+   python run_cmat.py score --data-dir /path/to/model/output \
+                            --output ./output/my_dev_run
+   ```
+
+2. **Compare a local run against a CMIP6 archived reference** — matching the
+   original IDL `run1 vs run2` workflow. The local run is scored against obs,
+   and its scores are compared to a CMIP6 model fetched from GCS.
+
+   ```
+   python run_cmat.py score --data-dir /path/to/model/output \
+                            --benchmark-model CESM2 --benchmark-member r1i1p1f1 \
+                            --output ./output/my_dev_vs_cesm2
+   ```
+
+3. **Score a CMIP6 model from GCS** — batch processing the full archive.
+
+   ```
+   python run_cmat.py score --model CESM2 --experiment historical \
+                            --member r1i1p1f1 --output ./output/CESM2
+   ```
+
+4. **Generate repository HTML** — aggregate per-model score JSONs into
+   sortable HTML index pages with color table summary plots.
+
+---
+
 ## Repository Structure
 
 ```
 pyCMAT/
   config.py              # paths, variable definitions, scoring weights
   src/
+    data_loader.py       # unified data access: local NetCDF OR CMIP6 GCS
     derived_vars.py      # compute fs, rsnt, swcftoa, ep, zg500-eddy, etc.
     climatology.py       # annual mean, seasonal contrast, ENSO regression
     regrid.py            # regrid to 1-deg, land/ocean mask
@@ -44,8 +78,11 @@ pyCMAT/
 
 ### Phase 1: Foundation (data I/O and regridding)
 - [ ] Set up `config.py` with variable lists, realm assignments, scoring weights,
-      and observed global-mean reference values used for sanity flags
-- [ ] Implement `regrid.py`: regrid arbitrary grids to 1-deg using `xesmf`
+      and observed global-mean reference values used for sanity flags- [ ] Implement `src/data_loader.py`: unified interface for two backends:
+      - **Local**: glob NetCDF files from a directory, infer variable from filename
+        or CF standard_name; handle non-standard grids and file layouts
+      - **CMIP6 GCS**: intake-esm catalog query, lazy Zarr loading
+      Both backends return `xarray.Dataset` objects in a consistent form.- [ ] Implement `regrid.py`: regrid arbitrary grids to 1-deg using `xesmf`
       (conservative remapping), remove zonal mean for `zg500`
 - [ ] Implement land/ocean masking via `regionmask`
 - [ ] Test CMIP6 data access via Pangeo intake-esm catalog (see Data section below)
