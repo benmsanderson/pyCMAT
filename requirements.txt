@@ -11,7 +11,9 @@ intake>=0.7.0
 intake-esm>=2023.11.10
 
 # Regridding and masking
-xesmf>=0.8.0
+# xesmf is optional (conservative remapping only); requires conda install of ESMF
+# conda install -c conda-forge xesmf
+pyresample>=1.28.0     # non-regular / unstructured grids (pip-installable)
 regionmask>=0.11.0
 
 # Numerics

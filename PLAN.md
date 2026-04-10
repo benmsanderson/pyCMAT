@@ -82,9 +82,16 @@ pyCMAT/
       - **Local**: glob NetCDF files from a directory, infer variable from filename
         or CF standard_name; handle non-standard grids and file layouts
       - **CMIP6 GCS**: intake-esm catalog query, lazy Zarr loading
-      Both backends return `xarray.Dataset` objects in a consistent form.- [ ] Implement `regrid.py`: regrid arbitrary grids to 1-deg using `xesmf`
-      (conservative remapping), remove zonal mean for `zg500`
-- [ ] Implement land/ocean masking via `regionmask`
+      Both backends return `xarray.Dataset` objects in a consistent form.
+- [x] Implement `regrid.py` with three-tier backend strategy:
+      - **Regular / Gaussian grids** (1D lat, lon): `xarray.interp()` via scipy
+        (pip-only, matches IDL `congrid()` bilinear behaviour)
+      - **Non-regular grids** (2D lat/lon, cubed-sphere `ncol`, tripolar ocean):
+        `pyresample` KDTree (pip-installable); falls back to `scipy.griddata`;
+        raises a descriptive error pointing to `ncremap` / `xesmf` if absent
+      - **Conservative remapping** (opt-in `--method conservative`): `xesmf`
+        (optional, requires `conda install -c conda-forge xesmf`)
+- [x] Implement land/ocean masking via `regionmask` Natural Earth polygons
 - [ ] Test CMIP6 data access via Pangeo intake-esm catalog (see Data section below)
 - [ ] Download and cache observational reference fields (see Obs section below)
 
