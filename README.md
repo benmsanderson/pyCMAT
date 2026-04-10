@@ -30,7 +30,7 @@ comparable to published values in the paper.
 ## Installation
 
 ```bash
-git clone <repo>
+git clone https://github.com/benmsanderson/pyCMAT.git
 cd pyCMAT
 python -m venv .venv
 source .venv/bin/activate
