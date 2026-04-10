@@ -1,0 +1,32 @@
+# Data directories (local caches, large files)
+data/model/
+data/obs/
+output/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Dot files for CDS API credentials (never commit)
+.cdsapirc
+
+# Jupyter notebooks (optional; include if you want notebooks tracked)
+# .ipynb_checkpoints/
+
+# IDL legacy files
+*.sav
+
+# Editor
+.DS_Store
+.vscode/settings.json
+*.swp

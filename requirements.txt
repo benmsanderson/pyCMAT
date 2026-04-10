@@ -1,0 +1,38 @@
+# Core data model
+xarray>=2023.1.0
+netCDF4>=1.6.0
+h5netcdf>=1.1.0
+
+# Cloud / Zarr access for CMIP6 GCS mirror
+zarr>=2.16.0
+fsspec>=2023.6.0
+gcsfs>=2023.6.0
+intake>=0.7.0
+intake-esm>=2023.11.10
+
+# Regridding and masking
+xesmf>=0.8.0
+regionmask>=0.11.0
+
+# Numerics
+numpy>=1.25.0
+scipy>=1.11.0
+
+# Analysis
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+cartopy>=0.22.0
+
+# Observational data download
+cdsapi>=0.6.0
+
+# HTML output
+jinja2>=3.1.0
+
+# CLI
+click>=8.1.0
+
+# intake-esm transitive dependency (required for Python 3.14)
+ipython>=8.0.0
