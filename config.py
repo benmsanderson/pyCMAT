@@ -8,10 +8,12 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths — override via environment variables or pass explicitly at runtime
 # ---------------------------------------------------------------------------
+import os
 ROOT_DIR = Path(__file__).parent
 DATA_DIR = ROOT_DIR / "data"
 OBS_DIR = DATA_DIR / "obs"
-MODEL_CACHE_DIR = DATA_DIR / "model"
+# CMIP6 download cache.  Override with the PYCMAT_CACHE_DIR env var.
+MODEL_CACHE_DIR = Path(os.environ.get("PYCMAT_CACHE_DIR", DATA_DIR / "model_cache"))
 OUTPUT_DIR = ROOT_DIR / "output"
 
 # ---------------------------------------------------------------------------

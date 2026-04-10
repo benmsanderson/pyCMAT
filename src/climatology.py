@@ -94,6 +94,8 @@ def enso_teleconnection(
     xr.DataArray (lat, lon) of regression slopes.
     """
     # Annual (Jul-Jun) means of both fields over overlapping period
+    da = _normalize_time_to_month_start(da)
+    sst = _normalize_time_to_month_start(sst)
     da_annual = _juljun_annual_mean(da)
     nino = nino34_index(sst)
 
@@ -111,7 +113,7 @@ def enso_teleconnection(
     nino_anom = nino - nino.mean(dim="time")
 
     # OLS slope: cov(X,Y) / var(X) applied pointwise via dot product
-    nino_var = float((nino_anom ** 2).sum(dim="time"))
+    nino_var = float((nino_anom ** 2).sum(dim="time").compute() if hasattr((nino_anom ** 2).sum(dim="time"), "compute") else (nino_anom ** 2).sum(dim="time"))
     slope = (da_anom * nino_anom).sum(dim="time") / nino_var
 
     return slope.rename(da.name)
@@ -120,6 +122,19 @@ def enso_teleconnection(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _normalize_time_to_month_start(da: xr.DataArray) -> xr.DataArray:
+    """
+    Replace the time coordinate with first-of-month timestamps so that
+    arrays with mid-month vs. start-of-month timestamps can be aligned.
+    """
+    import cftime
+    new_times = [
+        type(t)(t.year, t.month, 1) if hasattr(t, "year") else t
+        for t in da.time.values
+    ]
+    return da.assign_coords(time=("time", new_times, da.time.attrs))
+
 
 def _juljun_annual_mean(da: xr.DataArray) -> xr.DataArray:
     """

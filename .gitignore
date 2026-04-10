@@ -1,5 +1,5 @@
 # Data directories (local caches, large files)
-data/model/
+data/model_cache/
 data/obs/
 output/
 

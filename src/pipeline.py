@@ -257,6 +257,13 @@ def run_scoring_pipeline(
     # ------------------------------------------------------------------
     pcors: dict[str, dict] = {}
 
+    # Load obs SST for ENSO Niño3.4 index (ERA5 ts)
+    obs_sst: Optional[xr.DataArray] = None
+    _obs_ts = _load_obs("ts", obs_dir)
+    if _obs_ts is not None:
+        obs_sst = regrid_to_1deg(_obs_ts) if _needs_regrid(_obs_ts) else _obs_ts
+        log.info("Loaded obs SST for ENSO index from %s", obs_dir / "ts.nc")
+
     for var, da in model_fields.items():
         obs_da = _load_obs(var, obs_dir)
         if obs_da is None:
@@ -279,7 +286,7 @@ def run_scoring_pipeline(
                     obs_regridded = apply_land_mask(obs_regridded)
                 elif var in _LAND_ONLY_VARS:
                     obs_regridded = apply_ocean_mask(obs_regridded)
-                obs_clims = _compute_obs_climatology(obs_regridded, sst_monthly_1deg, timescale)
+                obs_clims = _compute_obs_climatology(obs_regridded, obs_sst, timescale)
                 r = pattern_cor(m_clim, obs_clims)
             else:
                 r = float("nan")

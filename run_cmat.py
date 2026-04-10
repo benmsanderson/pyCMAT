@@ -89,10 +89,16 @@ def cli(verbose: bool) -> None:
               help="Skip generating diagnostic map plots (faster for batch runs)")
 @click.option("--clobber",    is_flag=True, default=False,
               help="Recompute even if cached results exist")
+@click.option("--cache-dir",  default=None, type=click.Path(),
+              help="Override the default GCS download cache location "
+                   "(default: data/model_cache/, or $PYCMAT_CACHE_DIR). "
+                   "Fields are saved under <cache-dir>/<model>/<experiment>/<member>/")
+@click.option("--no-cache",   is_flag=True, default=False,
+              help="Disable local caching of CMIP6 GCS downloads (always re-streams from GCS)")
 def score(
     data_dir, name_map, model, experiment, member,
     benchmark_model, benchmark_member,
-    year_start, year_end, output, obs_dir, no_plots, clobber
+    year_start, year_end, output, obs_dir, no_plots, clobber, cache_dir, no_cache
 ) -> None:
     """
     Compute CMAT scores for a single model simulation.
@@ -139,14 +145,18 @@ def score(
     else:
         run_label = f"{model}_{member}"
         log.info("Scoring CMIP6: %s %s %s (%d-%d)", model, experiment, member, *year_range)
-        loader = CmatLoader.from_cmip6(model, experiment, member, year_range=year_range)
+        resolved_cache = None if no_cache else (cache_dir or "default")
+        loader = CmatLoader.from_cmip6(model, experiment, member, year_range=year_range,
+                                       cache_dir=resolved_cache)
 
     # Optionally build a benchmark loader for comparison
     benchmark_loader = None
     if benchmark_model:
         log.info("Benchmark: CMIP6 %s %s (%d-%d)", benchmark_model, benchmark_member, *year_range)
+        resolved_cache = None if no_cache else (cache_dir or "default")
         benchmark_loader = CmatLoader.from_cmip6(
-            benchmark_model, experiment, benchmark_member, year_range=year_range
+            benchmark_model, experiment, benchmark_member, year_range=year_range,
+            cache_dir=resolved_cache
         )
 
     # Resolve observational data directory
@@ -237,27 +247,114 @@ def report(scores_dir, archive, output) -> None:
 @cli.command("fetch-obs")
 @click.option("--output", required=True, type=click.Path(),
               help="Directory to cache observational reference files")
-@click.option("--datasets", default="all", show_default=True,
-              help="Comma-separated list of datasets to fetch: "
-                   "ceres,era5,gpcp,erai  or 'all'")
-def fetch_obs(output, datasets) -> None:
+@click.option("--source", "sources",
+              type=click.Choice(["ceres", "gpcp", "era5", "all"], case_sensitive=False),
+              multiple=True, default=("all",), show_default=True,
+              help="Which sources to fetch. Repeat flag for multiple: "
+                   "--source ceres --source gpcp")
+@click.option("--year-start", default=2001, show_default=True, type=int,
+              help="Start year for obs period")
+@click.option("--year-end", default=2022, show_default=True, type=int,
+              help="End year for obs period")
+@click.option("--earthdata-token", default=None, envvar="EARTHDATA_TOKEN",
+              help="NASA Earthdata bearer token for CERES download. "
+                   "Falls back to ~/.netrc (machine urs.earthdata.nasa.gov). "
+                   "Also reads EARTHDATA_TOKEN env var.")
+def fetch_obs(output, sources, year_start, year_end, earthdata_token) -> None:
     """
-    Download observational reference datasets needed for scoring.
+    Download observational reference datasets needed for CMAT scoring.
 
-    CERES EBAF 4.1 is fetched from NASA CERES; ERA5 from Copernicus CDS
-    (requires a ~/.cdsapirc credentials file); GPCP CDR from NOAA NCEI.
+    \b
+    Sources:
+      ceres   CERES EBAF Ed4.2 (NASA Earthdata, free account required)
+              -> rsnt, rlut, swcftoa, lwcftoa; surface radiation for fs/rtfs
+      gpcp    GPCP CDR v2.3 (NOAA PSL, no auth required)
+              -> pr
+      era5    ERA5 monthly means (Copernicus CDS, requires ~/.cdsapirc)
+              -> prw, hurs, hfls, psl, sfcWind, ts, zg500, wap500, hur500
+
+    \b
+    After fetching CERES + ERA5, derived obs fields (fs, rtfs, ep) are
+    computed automatically from the component files.
+
+    \b
+    Auth setup:
+      CERES:  https://urs.earthdata.nasa.gov  (free; add urs.earthdata.nasa.gov
+              to ~/.netrc or export EARTHDATA_TOKEN=<token>)
+      ERA5:   https://cds.climate.copernicus.eu/how-to-api  (free; creates
+              ~/.cdsapirc with your personal access token)
     """
+    from src.obs_fetcher import (
+        fetch_ceres, fetch_gpcp, fetch_era5, derive_obs_fs_rtfs
+    )
+
     output_path = Path(output)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    to_fetch = [d.strip() for d in datasets.split(",")] if datasets != "all" \
-               else ["ceres", "era5", "gpcp", "erai"]
+    to_fetch = set(sources)
+    if "all" in to_fetch:
+        to_fetch = {"ceres", "gpcp", "era5"}
 
-    log.info("Will fetch: %s -> %s", to_fetch, output_path)
+    written_all = []
 
-    raise NotImplementedError(
-        "fetch-obs command: observational download not yet implemented"
-    )
+    if "ceres" in to_fetch:
+        click.echo("Fetching CERES EBAF Ed4.2 (TOA + Surface) ...")
+        try:
+            written = fetch_ceres(
+                output_path,
+                start_year=year_start,
+                end_year=year_end,
+                earthdata_token=earthdata_token,
+            )
+            written_all += written
+            click.echo(f"  CERES: wrote {written}")
+        except Exception as exc:
+            log.error("CERES fetch failed: %s", exc)
+            click.echo(f"  CERES FAILED: {exc}", err=True)
+
+    if "gpcp" in to_fetch:
+        click.echo("Fetching GPCP CDR v2.3 (precipitation) ...")
+        try:
+            written = fetch_gpcp(
+                output_path,
+                start_year=year_start,
+                end_year=year_end,
+            )
+            written_all += written
+            click.echo(f"  GPCP: wrote {written}")
+        except Exception as exc:
+            log.error("GPCP fetch failed: %s", exc)
+            click.echo(f"  GPCP FAILED: {exc}", err=True)
+
+    if "era5" in to_fetch:
+        click.echo("Fetching ERA5 monthly means via CDS API ...")
+        try:
+            written = fetch_era5(
+                output_path,
+                start_year=year_start,
+                end_year=year_end,
+            )
+            written_all += written
+            click.echo(f"  ERA5: wrote {written}")
+        except Exception as exc:
+            log.error("ERA5 fetch failed: %s", exc)
+            click.echo(f"  ERA5 FAILED: {exc}", err=True)
+
+    # Derive composite obs (fs, rtfs, ep) from downloaded components
+    if {"ceres", "era5"} & to_fetch:
+        click.echo("Deriving composite obs fields (fs, rtfs, ep) ...")
+        try:
+            derived = derive_obs_fs_rtfs(output_path)
+            written_all += derived
+            click.echo(f"  Derived: {derived}")
+        except Exception as exc:
+            log.warning("Derived obs computation failed: %s", exc)
+
+    click.echo(f"\nDone. {len(written_all)} obs variables in {output_path}:")
+    for v in sorted(set(written_all)):
+        path = output_path / f"{v}.nc"
+        size_mb = path.stat().st_size >> 20 if path.exists() else 0
+        click.echo(f"  {v:12s}  {size_mb} MB")
 
 
 # ---------------------------------------------------------------------------

@@ -111,6 +111,8 @@ class CmatLoader:
         self.source_id: str | None = None
         self.experiment_id: str | None = None
         self.member_id: str | None = None
+        # Optional local disk cache for GCS downloads
+        self._cache_dir: Path | None = None
 
     # ------------------------------------------------------------------
     # Constructors
@@ -153,6 +155,7 @@ class CmatLoader:
         member_id: str = "r1i1p1f1",
         year_range: tuple[int, int] = (1995, 2014),
         catalog_url: str = "https://storage.googleapis.com/cmip6/pangeo-cmip6.json",
+        cache_dir: str | Path | None = "default",
     ) -> "CmatLoader":
         """
         Create a loader backed by the Pangeo CMIP6 GCS intake-esm catalog.
@@ -169,6 +172,12 @@ class CmatLoader:
             Inclusive year range to extract after loading.
         catalog_url : str
             URL of the intake-esm JSON catalog descriptor.
+        cache_dir : str, Path, or None
+            Root directory for local NetCDF caching.  Downloaded fields are
+            saved under ``<cache_dir>/<source_id>/<experiment_id>/<member_id>/``
+            and reused on subsequent runs, skipping the GCS download.
+            Defaults to ``data/model_cache/`` (or ``$PYCMAT_CACHE_DIR`` if set).
+            Pass ``None`` to disable caching entirely.
         """
         try:
             import intake
@@ -178,10 +187,27 @@ class CmatLoader:
                 "Run: pip install intake-esm gcsfs ipython"
             ) from e
 
+        # The Pangeo CMIP6 bucket is public (requester-pays exempt for reads).
+        # Tell gcsfs to use anonymous access so it doesn't try ADC credentials.
+        try:
+            import fsspec
+            fsspec.config.conf["gcs"] = {"token": "anon"}
+        except (ImportError, Exception):
+            pass
+
+        # Resolve default cache location from config / env var
+        if cache_dir == "default":
+            from config import MODEL_CACHE_DIR
+            cache_dir = MODEL_CACHE_DIR
+
         loader = cls(backend="cmip6", year_range=year_range)
         loader.source_id = source_id
         loader.experiment_id = experiment_id
         loader.member_id = member_id
+        if cache_dir is not None:
+            loader._cache_dir = Path(cache_dir) / source_id / experiment_id / member_id
+            loader._cache_dir.mkdir(parents=True, exist_ok=True)
+            log.info("Model cache dir: %s", loader._cache_dir)
         log.info("Opening intake-esm catalog: %s", catalog_url)
         loader._catalog = intake.open_esm_datastore(catalog_url)
         log.info("CMIP6 loader initialised: %s %s %s (%d-%d)",
@@ -283,7 +309,20 @@ class CmatLoader:
     # ------------------------------------------------------------------
 
     def _load_cmip6(self, cmat_var: str) -> xr.DataArray:
-        """Query intake-esm catalog and return the requested variable as DataArray."""
+        """Query intake-esm catalog and return the requested variable as DataArray.
+
+        If a ``cache_dir`` was provided at construction time, the downloaded
+        field is saved as ``<cache_dir>/<var>.nc`` and reloaded from disk on
+        subsequent calls, avoiding repeated GCS traffic.
+        """
+        # --- cache hit ---
+        if self._cache_dir is not None:
+            cached = self._cache_dir / f"{cmat_var}.nc"
+            if cached.exists():
+                log.info("Cache hit for %s: loading from %s", cmat_var, cached)
+                time_coder = xr.coders.CFDatetimeCoder(use_cftime=True)
+                ds = xr.open_dataset(cached, chunks="auto", decode_times=time_coder)
+                return ds[cmat_var]
         subset = self._catalog.search(
             source_id=self.source_id,
             experiment_id=self.experiment_id,
@@ -315,13 +354,32 @@ class CmatLoader:
                  cmat_var, self.source_id, self.experiment_id, self.member_id)
 
         _time_coder = xr.coders.CFDatetimeCoder(use_cftime=True)
+
         dsets = subset.to_dataset_dict(
-            xarray_open_kwargs={"chunks": "auto", "decode_times": _time_coder},
+            xarray_open_kwargs={"chunks": "auto", "decode_times": _time_coder,
+                                "storage_options": {"token": "anon"}},
             progressbar=False,
         )
         # to_dataset_dict returns {key: Dataset}; pick first entry
         ds = next(iter(dsets.values()))
-        return ds[cmat_var]
+        da = ds[cmat_var]
+        # intake-esm adds member_id / dcpp_init_year dimensions of size 1;
+        # squeeze them out so downstream code sees (time, [plev,] lat, lon).
+        extra_dims = [d for d in da.dims if d not in ("time", "lat", "lon", "lev",
+                                                       "plev", "level", "latitude",
+                                                       "longitude", "pressure_level")]
+        if extra_dims:
+            da = da.isel({d: 0 for d in extra_dims}).drop_vars(extra_dims, errors="ignore")
+
+        # --- cache write ---
+        if self._cache_dir is not None:
+            cached = self._cache_dir / f"{cmat_var}.nc"
+            log.info("Caching %s to %s ...", cmat_var, cached)
+            enc = {cmat_var: {"dtype": "float32", "zlib": True, "complevel": 4}}
+            da.compute().to_dataset(name=cmat_var).to_netcdf(cached, encoding=enc)
+            log.info("Cached %s (%s)", cmat_var, cached)
+
+        return da
 
     # ------------------------------------------------------------------
     # Coordinate standardisation helpers

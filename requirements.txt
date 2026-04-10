@@ -10,7 +10,14 @@ gcsfs>=2023.6.0
 intake>=0.7.0
 intake-esm>=2023.11.10
 
-# Regridding and masking
+# HTTP downloads and NASA Earthdata access
+requests>=2.31.0
+earthaccess>=0.11.0  # NASA Earthdata search+download (reads ~/.netrc)
+
+# ERA5 download via Copernicus CDS
+# Requires ~/.cdsapirc with personal access token from:
+# https://cds.climate.copernicus.eu/how-to-api
+cdsapi>=0.7.0
 # xesmf is optional (conservative remapping only); requires conda install of ESMF
 # conda install -c conda-forge xesmf
 pyresample>=1.28.0     # non-regular / unstructured grids (pip-installable)
