@@ -272,7 +272,10 @@ class CmatLoader:
         key = str(path)
         if key not in self._local_ds_cache:
             log.debug("Opening %s", path)
-            self._local_ds_cache[key] = xr.open_dataset(path, chunks="auto", use_cftime=True)
+            time_coder = xr.coders.CFDatetimeCoder(use_cftime=True)
+            self._local_ds_cache[key] = xr.open_dataset(
+                path, chunks="auto", decode_times=time_coder
+            )
         return self._local_ds_cache[key]
 
     # ------------------------------------------------------------------
@@ -311,8 +314,9 @@ class CmatLoader:
         log.info("Loading %s from CMIP6 GCS (%s %s %s)",
                  cmat_var, self.source_id, self.experiment_id, self.member_id)
 
+        _time_coder = xr.coders.CFDatetimeCoder(use_cftime=True)
         dsets = subset.to_dataset_dict(
-            xarray_open_kwargs={"chunks": "auto", "use_cftime": True},
+            xarray_open_kwargs={"chunks": "auto", "decode_times": _time_coder},
             progressbar=False,
         )
         # to_dataset_dict returns {key: Dataset}; pick first entry

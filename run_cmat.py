@@ -13,10 +13,18 @@ for full option details.
 """
 import sys
 import json
+import math
 import logging
 from pathlib import Path
 
 import click
+
+
+def _json_default(obj):
+    """JSON serialiser that converts NaN/Inf to null."""
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    raise TypeError(f"Object of type {type(obj)} is not JSON serialisable")
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -141,20 +149,41 @@ def score(
             benchmark_model, experiment, benchmark_member, year_range=year_range
         )
 
-    # Pipeline (to be implemented):
-    # 1. Load component fields via loader.load(var)
-    # 2. Compute derived variables  (src/derived_vars.py)
-    # 3. Regrid to 1-deg            (src/regrid.py)
-    # 4. Compute climatologies      (src/climatology.py)
-    # 5. Pattern correlations vs obs (src/pattern_cor.py)
-    # 6. Compute scores              (src/scoring.py)
-    # 7. If benchmark_loader: also score benchmark, flag improvements/degradations
-    # 8. Write scores.json
-    # 9. Generate plots unless --no-plots  (src/plots.py)
+    # Resolve observational data directory
+    if obs_dir is None:
+        from config import OBS_DIR
+        obs_dir = str(OBS_DIR)
 
-    raise NotImplementedError(
-        "score command: scoring pipeline not yet implemented (data_loader is ready)"
+    from src.pipeline import run_scoring_pipeline
+    results = run_scoring_pipeline(
+        loader,
+        obs_dir=obs_dir,
+        benchmark_loader=benchmark_loader,
     )
+
+    # Write scores.json
+    with open(scores_file, "w") as fh:
+        json.dump(results, fh, indent=2, default=_json_default)
+    log.info("Scores written to %s", scores_file)
+
+    # Summary to stdout
+    s = results["scores"]
+    click.echo(f"\n{'='*50}")
+    click.echo(f"  Run: {run_label}")
+    click.echo(f"  Period: {year_start}-{year_end}")
+    click.echo(f"{'='*50}")
+    click.echo(f"  Energy:   {s['realm'].get('energy',  float('nan')):.3f}")
+    click.echo(f"  Water:    {s['realm'].get('water',   float('nan')):.3f}")
+    click.echo(f"  Dynamics: {s['realm'].get('dynamics',float('nan')):.3f}")
+    click.echo(f"{'='*50}")
+    click.echo(f"  OVERALL:  {s['overall']:.3f}")
+    click.echo(f"{'='*50}")
+
+    if results["delta_scores"]:
+        click.echo("\n  Variable-level deltas vs benchmark (positive = improvement):")
+        for var, delta in sorted(results["delta_scores"].items()):
+            sign = "+" if delta > 0 else ""
+            click.echo(f"    {var:12s}  {sign}{delta:.4f}")
 
 
 # ---------------------------------------------------------------------------

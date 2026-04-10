@@ -130,4 +130,4 @@ def _juljun_annual_mean(da: xr.DataArray) -> xr.DataArray:
     """
     # Shift time so July becomes month 1 of a fiscal year, then resample
     # xarray's resample with offset handles this cleanly
-    return da.resample(time="AS-JUL").mean(dim="time")
+    return da.resample(time="YS-JUL").mean(dim="time")
