@@ -1,7 +1,7 @@
 # pyCMAT
 
 A Python port of the Climate Model Assessment Tool (CMAT) described in
-[Fasullo et al. (2020, GMD)](https://doi.org/10.5194/gmd-13-3627-2020).
+[Fasullo et al. (2020, GMD)][(https://doi.org/10.5194/gmd-13-3627-2020)](https://doi.org/10.5194/gmd-13-3627-2020).
 
 pyCMAT benchmarks climate model fidelity by computing area-weighted pattern
 correlations between model output and observational/reanalysis datasets across
@@ -230,7 +230,4 @@ the first `score` run for each model.
 
 ## Reference
 
-Fasullo, J. T., Phillips, A. S., and Deser, C. (2020): NCAR's COVID-19 impact
-on laboratory computing and opportunities for the future of open source
-community Earth system model development. *Geosci. Model Dev.*, 13, 3627-3642,
-https://doi.org/10.5194/gmd-13-3627-2020
+Fasullo, J. T.: Evaluating simulated climate patterns from the CMIP archives using satellite and reanalysis datasets using the Climate Model Assessment Tool (CMATv1), Geosci. Model Dev., 13, 3627–3642, https://doi.org/10.5194/gmd-13-3627-2020, 2020.
