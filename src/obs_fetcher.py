@@ -291,8 +291,8 @@ _ERA5_SINGLE_LEVEL_VARS = {
     "total_column_water_vapour"           : ("tcwv", "prw",     1.0,    0.0),
     "2m_dewpoint_temperature"             : ("d2m",  "_d2m",    1.0, -273.15),  # intermediate
     "2m_temperature"                      : ("t2m",  "_t2m",    1.0, -273.15),  # intermediate
-    "surface_latent_heat_flux"            : ("slhf", "hfls",   -1.0/3600.0, 0.0),  # J/m2/hr -> W/m2, sign flip
-    "surface_sensible_heat_flux"          : ("sshf", "hfss",   -1.0/3600.0, 0.0),
+    "surface_latent_heat_flux"            : ("slhf", "hfls",   -1.0/86400.0, 0.0),  # J/m2/day -> W/m2, sign flip
+    "surface_sensible_heat_flux"          : ("sshf", "hfss",   -1.0/86400.0, 0.0),
     "skin_temperature"                    : ("skt",  "ts",      1.0,    0.0),
 }
 

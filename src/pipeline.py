@@ -47,6 +47,9 @@ _OCEAN_ONLY_VARS = {"fs", "rtfs"}
 # Variables that are scored over land only
 _LAND_ONLY_VARS: set = set()
 
+# Variables scored as zonal eddies (zonal mean removed before correlation)
+_EDDY_VARS = {"zg500"}
+
 # ---------------------------------------------------------------------------
 # Derived-variable computation dispatch table
 # Maps CMAT variable name -> callable that accepts (loader, raw_fields) -> DataArray
@@ -286,6 +289,8 @@ def run_scoring_pipeline(
                     obs_regridded = apply_land_mask(obs_regridded)
                 elif var in _LAND_ONLY_VARS:
                     obs_regridded = apply_ocean_mask(obs_regridded)
+                if var in _EDDY_VARS:
+                    obs_regridded = remove_zonal_mean(obs_regridded)
                 obs_clims = _compute_obs_climatology(obs_regridded, obs_sst, timescale)
                 r = pattern_cor(m_clim, obs_clims)
             else:
