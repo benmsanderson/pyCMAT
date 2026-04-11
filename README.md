@@ -56,7 +56,7 @@ all 16 variables are present before scoring.
 ```bash
 python run_cmat.py score \
     --data-dir /path/to/model/output \
-    --obs-dir /projects/NS9188K/CMATobs \
+    --obs-dir /datalake/NS16000B/CMATobs \
     --output output/my_run
 ```
 
@@ -68,7 +68,7 @@ Add `--bias-maps` to generate annual-mean bias map PNGs alongside scores:
 ```bash
 python run_cmat.py score \
     --data-dir /path/to/model/output \
-    --obs-dir /projects/NS9188K/CMATobs \
+    --obs-dir /datalake/NS16000B/CMATobs \
     --output output/my_run \
     --bias-maps
 ```
@@ -84,7 +84,7 @@ derivations, and time-coordinate fix are all handled automatically.
 python run_cmat.py score \
     --noresm-case /projects/NS9560K/noresm/cases/MyCaseName \
     --year-start 1950 --year-end 1969 \
-    --obs-dir /projects/NS9188K/CMATobs \
+    --obs-dir /datalake/NS16000B/CMATobs \
     --output output/MyCaseName
 ```
 
@@ -96,7 +96,7 @@ python run_cmat.py score \
     --noresm-case /projects/NS9560K/noresm/cases/MyCaseName \
     --noresm-stream cam.h0 \
     --year-start 1950 --year-end 1969 \
-    --obs-dir /projects/NS9188K/CMATobs --output output/MyCaseName
+    --obs-dir /datalake/NS16000B/CMATobs --output output/MyCaseName
 ```
 
 Historical, piControl, and other experiment types all work — CMAT scores
@@ -110,7 +110,7 @@ to `data/model_cache/`. Re-runs load from disk.
 python run_cmat.py score \
     --data-dir /path/to/model/output \
     --benchmark-model CESM2 \
-    --obs-dir /projects/NS9188K/CMATobs \
+    --obs-dir /datalake/NS16000B/CMATobs \
     --output output/my_run_vs_cesm2
 ```
 
