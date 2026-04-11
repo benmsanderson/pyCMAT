@@ -69,6 +69,16 @@ python run_cmat.py score \
 Files in `--data-dir` are matched by filename stem, CF `standard_name`, or
 a built-in alias table. Pass `--name-map '{"MYVAR": "pr"}'` for custom names.
 
+Add `--bias-maps` to generate annual-mean bias map PNGs alongside scores:
+
+```bash
+python run_cmat.py score \
+    --data-dir /path/to/model/output \
+    --obs-dir data/obs \
+    --output output/my_run \
+    --bias-maps
+```
+
 ### 3. Score a model run and compare against a CMIP6 reference
 
 The CMIP6 benchmark is fetched from the Pangeo GCS mirror and cached locally
@@ -212,19 +222,152 @@ HTML index pages (overall, energy, water, dynamics, annual, seasonal, ENSO)
 plus 7 matching color table PNG heatmaps:
 
 ```bash
-python run_cmat.py report --scores-dir output --report-dir report
+python run_cmat.py report --scores-dir output --output report
 ```
 
 Output goes to `report/` (gitignored). Open `report/index.html` in a browser.
+Model names in the index pages are links to per-model detail pages that include
+bias map thumbnails (if `--bias-maps` was used when scoring).
 
 ---
 
 ## Not Yet Implemented
 
-- **Bias map plots** (`src/plots.py` `plot_bias_map()`): per-variable 3-panel
-  maps (model mean / obs / bias) with zonal mean insets — requires cartopy (Phase 4)
 - **EOF/bias analysis** (`src/eof_analysis.py`): bias PC decomposition
   analogous to Fig. 9 in Fasullo et al. (2020)
+
+---
+
+## Preparing Local Model Data
+
+The `score --data-dir` path accepts a directory of monthly-mean NetCDF files
+(one variable per file is simplest, but multi-variable files work too).
+Files are matched to scored variables in this priority order:
+
+1. **Filename stem** — e.g. `pr.nc` or `precipitation.nc`
+2. **CF `standard_name` attribute** — e.g. `precipitation_flux`
+3. **Built-in alias table** — common alternative names (e.g. `PRECT` -> `pr`)
+4. **`--name-map` JSON override** — anything else
+
+### Required variables
+
+To score all 16 CMAT variables, provide these raw fields. pyCMAT derives
+`rsnt`, `swcftoa`, `lwcftoa`, `fs`, `rtfs`, and `ep` automatically; you do
+not need to pre-derive them.
+
+| CMIP6 name | Feeds scored variable(s) |
+|------------|---------------------------|
+| `rsdt` | rsnt, swcftoa |
+| `rsut` | rsnt, swcftoa |
+| `rsutcs` | swcftoa |
+| `rlut` | rlut, lwcftoa |
+| `rlutcs` | lwcftoa |
+| `rsds` | fs, rtfs |
+| `rsus` | fs, rtfs |
+| `rlds` | fs, rtfs |
+| `rlus` | fs, rtfs |
+| `hfls` | fs, rtfs, ep, hfls |
+| `hfss` | fs, rtfs |
+| `pr` | pr, ep |
+| `prw` | prw |
+| `hurs` | hurs |
+| `psl` | psl |
+| `sfcWind` | sfcWind |
+| `zg` (with `plev`, needs 500 hPa) | zg500 |
+| `wap` (with `plev`, needs 500 hPa) | wap500 |
+| `hur` (with `plev`, needs 500 hPa) | hur500 |
+| `ts` or `tos` | Nino3.4 index for ENSO regression |
+
+Missing variables are skipped gracefully — you get NaN scores for those
+variables, but the rest score normally.
+
+### File naming
+
+The simplest layout names each file by CMIP6 variable:
+
+```
+my_run/
+  pr.nc         prw.nc       hurs.nc       psl.nc      sfcWind.nc
+  rlut.nc       rsdt.nc      rsut.nc       rsutcs.nc   rlutcs.nc
+  rsds.nc       rsus.nc      rlds.nc       rlus.nc
+  hfls.nc       hfss.nc
+  zg.nc         wap.nc       hur.nc
+  ts.nc
+```
+
+For models using different internal names, add `--name-map`:
+
+```bash
+python run_cmat.py score \
+    --data-dir /path/to/cam/output \
+    --name-map '{"PRECT": "pr", "TMQ": "prw", "LHFLX": "hfls", "SHFLX": "hfss"}' \
+    --obs-dir data/obs \
+    --output output/my_cam_run
+```
+
+### Time dimension
+
+- Must have a CF-compliant `time` coordinate with **monthly** frequency
+- Standard and `cftime` calendars both work
+- Minimum useful period: 10 years (needed for stable ENSO regression)
+- Recommended: 20 years matching the obs period (2001-2020) or the
+  standard CMIP6 historical end (1995-2014)
+- Use `--year-start` / `--year-end` to subset the time axis before scoring
+
+### Grid
+
+pyCMAT regrids everything to 1 degree x 1 degree before computing pattern
+correlations. Any grid is accepted:
+
+- **Regular lat/lon grids** (1D lat/lon arrays): fast interpolation via
+  `xarray.interp`
+- **Unstructured or 2D-coordinate grids** (cubed-sphere, tripolar, `ncol`):
+  regridded via `pyresample` KDTree
+
+Pressure-level fields (`zg`, `wap`, `hur`) must include a `plev` coordinate
+in **Pascals** (50000 Pa is extracted for the 500 hPa level automatically).
+
+### Units
+
+pyCMAT assumes CMIP6-standard SI units. Common pitfalls:
+
+| Variable | Expected | Common non-standard form |
+|----------|----------|--------------------------|
+| `pr` | kg m-2 s-1 | mm day-1 (divide by 86400) |
+| `psl` | Pa | hPa (multiply by 100) |
+| `zg` | m | dam or gpm (multiply by 10) |
+| `hfls`, `hfss` | W m-2 | ERA5 J m-2 accumulations (divide by 86400) |
+| `rsds`, `rsus`, etc. | W m-2 | ERA5 J m-2 accumulations (divide by 86400) |
+
+### Minimal post-processing example (CESM/CAM)
+
+For CESM `.cam.h0.` monthly history files, extract and rename with xarray:
+
+```python
+import xarray as xr
+
+ds = xr.open_mfdataset('case.cam.h0.1995-*.nc', combine='by_coords')
+
+# Map CAM names to CMIP6 names
+cam_to_cmip6 = {
+    'FSNTOA': 'rsdt',   # net TOA SW (clear label differs from CMIP6 convention)
+    'FLUT':   'rlut',
+    'PRECT':  'pr',
+    'TMQ':    'prw',
+    'PSL':    'psl',
+    'LHFLX':  'hfls',
+    'SHFLX':  'hfss',
+}
+ds_out = ds[list(cam_to_cmip6)].rename(cam_to_cmip6)
+ds_out.sel(time=slice('1995', '2014')).to_netcdf('my_run/atm_vars.nc')
+```
+
+Or save individual per-variable files and let pyCMAT match by stem:
+
+```python
+for cam_name, cmip6_name in cam_to_cmip6.items():
+    ds[[cam_name]].rename({cam_name: cmip6_name}).to_netcdf(f'my_run/{cmip6_name}.nc')
+```
 
 ---
 
