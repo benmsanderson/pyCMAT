@@ -24,8 +24,9 @@ comparable to published values in the paper.
 | NorESM2-LM historical validated | **0.761 overall** (paper: 0.74, r2i1p1f1) |
 | Color table plots (7 PNGs) | **Working** |
 | HTML report output (7 pages) | **Working** |
-| Bias map plots | In progress (Phase 4) |
-| EOF/bias analysis | Not yet implemented |
+| Bias map plots | **Working** |
+| EOF/bias PC decomposition | Not yet implemented (needs ensemble of models) |
+| Score distribution whisker plots | Not yet implemented (needs ensemble of models) |
 
 ---
 
@@ -56,6 +57,19 @@ python run_cmat.py fetch-obs --source all \
 Requires:
 - NASA Earthdata account (for CERES) — credentials in `~/.netrc`
 - CDS API key (for ERA5) — credentials in `~/.cdsapirc`
+
+**Skip this step if you already have an obs directory.** If your group
+maintains a shared processed-obs folder, point `--obs-dir` directly at it:
+
+```bash
+python run_cmat.py score \
+    --data-dir /path/to/model/output \
+    --obs-dir /shared/pyCMAT_obs \
+    --output output/my_run
+```
+
+Run `python run_cmat.py check-data --obs-dir /shared/pyCMAT_obs` to verify
+all 16 variables are present before scoring.
 
 ### 2. Score a local model run
 
@@ -233,8 +247,14 @@ bias map thumbnails (if `--bias-maps` was used when scoring).
 
 ## Not Yet Implemented
 
-- **EOF/bias analysis** (`src/eof_analysis.py`): bias PC decomposition
-  analogous to Fig. 9 in Fasullo et al. (2020)
+Both remaining stubs are ensemble-level analyses that require scores from many
+models to be meaningful. They are not needed for single-model scoring.
+
+- **EOF/bias PC decomposition** (`src/eof_analysis.py`): PCA of the bias
+  field stacked across models, analogous to Figs. 6-9 in Fasullo et al. (2020).
+  Requires `sklearn` and a collection of per-model bias arrays.
+- **Score distribution plots** (`src/plots.py` `plot_score_distributions()`):
+  whisker plots of score spread across CMIP archives (Fig. 10 style).
 
 ---
 
