@@ -55,10 +55,14 @@ def detect_grid_type(da: xr.DataArray) -> str:
       'unstructured' — single horizontal dimension (ncol for CAM-SE/EAM,
                        cell/node for ICON/FESOM)
     """
-    # Check for unstructured: a single horizontal dim that is not lat or lon
+    # Check for unstructured: a single horizontal dim that is not lat or lon.
+    # CAM-SE uses 'ncol' (physics grid) or 'ncol_d' (dynamics grid); other
+    # models use 'cell', 'node', etc.  Match any dim that starts with 'ncol'
+    # or equals a known unstructured dim name.
+    _UNSTRUCT_EXACT = {"cell", "cells", "node", "nodes", "npoints", "gridcell"}
     for dim in da.dims:
-        if dim.lower() in ("ncol", "cell", "cells", "node", "nodes",
-                           "npoints", "gridcell"):
+        dl = dim.lower()
+        if dl.startswith("ncol") or dl in _UNSTRUCT_EXACT:
             return "unstructured"
 
     lat_coord = _find_coord(da, ("lat", "latitude", "nav_lat", "y"))
@@ -355,8 +359,10 @@ def _apply_over_slices(
     # Identify the horizontal dims to stack
     non_horiz = [d for d in da.dims
                  if d.lower() not in ("lat", "latitude", "lon", "longitude",
-                                      "nav_lat", "nav_lon", "ncol", "cell",
-                                      "cells", "node", "npoints", "x", "y")]
+                                      "nav_lat", "nav_lon", "x", "y")
+                 and not d.lower().startswith("ncol")
+                 and d.lower() not in ("cell", "cells", "node", "nodes",
+                                       "npoints", "gridcell")]
     # Stack all non-horizontal dims into a single 'sample' dim for iteration
     if non_horiz:
         stacked = da.stack(sample=non_horiz)
@@ -385,9 +391,14 @@ def _apply_over_slices(
         attrs=da.attrs,
     )
 
-    # Unstack sample back to original non-horizontal dims
+    # Unstack sample back to original non-horizontal dims, then enforce
+    # the canonical dim order (non-horiz dims first, then lat, lon).
+    # xarray.unstack() does not guarantee to restore the original dim order,
+    # so we always transpose explicitly.
     if non_horiz:
         out = out.unstack("sample")
+
+    out = out.transpose(*non_horiz, "lat", "lon")
 
     return out
 
