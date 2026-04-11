@@ -64,11 +64,11 @@ maintains a shared processed-obs folder, point `--obs-dir` directly at it:
 ```bash
 python run_cmat.py score \
     --data-dir /path/to/model/output \
-    --obs-dir /shared/pyCMAT_obs \
+    --obs-dir /projects/NS9188K/CMATobs \
     --output output/my_run
 ```
 
-Run `python run_cmat.py check-data --obs-dir /shared/pyCMAT_obs` to verify
+Run `python run_cmat.py check-data --obs-dir /projects/NS9188K/CMATobs` to verify
 all 16 variables are present before scoring.
 
 ### 2. Score a local model run
