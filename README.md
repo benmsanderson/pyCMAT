@@ -48,8 +48,8 @@ python run_cmat.py score \
     --output output/my_run
 ```
 
-Run `python run_cmat.py check-data --obs-dir /projects/NS9188K/CMATobs` to verify
-all 16 variables are present before scoring.
+Run `python run_cmat.py check-data --model NorESM2-LM` to verify all required
+CMIP6 variables are available in the Pangeo catalog for a given model.
 
 ### 2. Score a local model run
 
@@ -123,10 +123,10 @@ python run_cmat.py score \
     --output output/CESM2
 ```
 
-### 6. Check available data
+### 6. Check CMIP6 catalog availability
 
 ```bash
-python run_cmat.py check-data --obs-dir data/obs
+python run_cmat.py check-data --model NorESM2-LM
 ```
 
 ---
