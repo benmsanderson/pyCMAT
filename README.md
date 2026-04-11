@@ -24,7 +24,7 @@ pip install -r requirements.txt
 
 ## Quick Start
 
-### 1. Fetch observational reference data
+### 1. Fetch observational reference data (if needed)
 
 Downloads CERES EBAF Ed4.2, GPCP CDR v2.3, and ERA5 fields for 2001-2020:
 
