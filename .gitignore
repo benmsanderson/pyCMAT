@@ -1,6 +1,7 @@
 # Data directories (local caches, large files)
 data/model_cache/
 data/obs/
+data/test/
 output/
 
 # Python artifacts
