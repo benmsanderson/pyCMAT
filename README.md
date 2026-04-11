@@ -16,6 +16,7 @@ comparable to published values in the paper.
 |-----------|--------|
 | Core scoring pipeline | **Working** |
 | Local NetCDF scoring | **Working** |
+| NorESM case scoring (raw h0 files) | **Working** |
 | CMIP6 GCS scoring (Pangeo) | **Working** |
 | CMIP6 disk cache | **Working** |
 | Observational reference data (26 files) | **Working** |
@@ -39,6 +40,16 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+> **On NIRD/Sigma2 HPC systems** the system Python may lack a working SSL
+> module, which breaks pip.  Use a Python that ships its own OpenSSL — for
+> example the conda-forge Python from an existing conda environment:
+>
+> ```bash
+> /nird/home/$USER/.conda/envs/<env>/bin/python3 -m venv .venv
+> source .venv/bin/activate
+> pip install -r requirements.txt
+> ```
 
 ---
 
@@ -93,7 +104,35 @@ python run_cmat.py score \
     --bias-maps
 ```
 
-### 3. Score a model run and compare against a CMIP6 reference
+### 4. Score a NorESM development run directly
+
+Point `--noresm-case` at a NorESM case output directory and pyCMAT reads the
+raw `atm/hist/*.cam.h0.YYYY-MM.nc` files directly — no pre-processing or
+variable renaming required.  The CAM→CMIP6 name mapping, surface-flux
+derivations, and time-coordinate fix are all handled automatically.
+
+```bash
+python run_cmat.py score \
+    --noresm-case /projects/NS9560K/noresm/cases/MyCaseName \
+    --year-start 1950 --year-end 1969 \
+    --obs-dir data/obs \
+    --output output/MyCaseName
+```
+
+Optionally specify a non-default history stream with `--noresm-stream`
+(default: `cam.h0`):
+
+```bash
+python run_cmat.py score \
+    --noresm-case /projects/NS9560K/noresm/cases/MyCaseName \
+    --noresm-stream cam.h0 \
+    --year-start 1950 --year-end 1969 \
+    --obs-dir data/obs --output output/MyCaseName
+```
+
+Historical, piControl, and other experiment types all work — CMAT scores
+spatial *patterns*, not absolute values, so the forcing level does not
+affect the method.
 
 The CMIP6 benchmark is fetched from the Pangeo GCS mirror and cached locally
 to `data/model_cache/`. Re-runs load from disk.
@@ -106,7 +145,7 @@ python run_cmat.py score \
     --output output/my_run_vs_cesm2
 ```
 
-### 4. Score a CMIP6 model directly
+### 5. Score a CMIP6 model directly
 
 ```bash
 python run_cmat.py score \
@@ -115,7 +154,7 @@ python run_cmat.py score \
     --output output/CESM2
 ```
 
-### 5. Check available data
+### 6. Check available data
 
 ```bash
 python run_cmat.py check-data --obs-dir data/obs
@@ -269,6 +308,52 @@ Files are matched to scored variables in this priority order:
 3. **Built-in alias table** — common alternative names (e.g. `PRECT` -> `pr`)
 4. **`--name-map` JSON override** — anything else
 
+### NorESM / CAM history files
+
+For NorESM development runs the easiest path is the dedicated
+`--noresm-case` backend (see [Quick Start §3](#3-score-a-noresm-development-run-directly)).
+It discovers `atm/hist/*.cam.h0.*.nc` files automatically and handles all
+of the following mappings internally — no shell pre-processing needed:
+
+| CAM h0 variable | CMIP6 variable | Notes |
+|-----------------|----------------|-------|
+| `PRECC + PRECL` | `pr` | multiplied by 1000 (m s⁻¹ → kg m⁻² s⁻¹) |
+| `TMQ` | `prw` | — |
+| `LHFLX` | `hfls` | — |
+| `SHFLX` | `hfss` | — |
+| `FLUT` | `rlut` | — |
+| `FLUTC` | `rlutcs` | — |
+| `FSUTOA` | `rsut` | — |
+| `FSNTOAC` | `rsutcs` | — |
+| `SOLIN` | `rsdt` | — |
+| `FSDS` | `rsds` | — |
+| `FSDS − FSNS` | `rsus` | derived from net SW |
+| `FLDS` | `rlds` | — |
+| `FLDS + FLNS` | `rlus` | derived from net LW |
+| `RELHUM` (lowest σ level) | `hurs` | near-surface RH |
+| `Z3` | `zg` | full 3-D field |
+| `OMEGA` | `wap` | full 3-D field |
+| `RELHUM` | `hur` | full 3-D field |
+| `PSL` | `psl` | — |
+| `U10` | `sfcWind` | — |
+| `TS` | `ts` | Niño3.4 SST index |
+
+The time coordinate is also corrected automatically: CAM writes each
+ monthly-mean record with a timestamp at the start of the *following* month;
+pyCMAT shifts it back using `time_bnds` so that seasonal labels and
+year-range slicing are correct.
+
+If you prefer to pre-process the history files yourself, use `--data-dir`
+with a `--name-map` override instead:
+
+```bash
+python run_cmat.py score \
+    --data-dir /path/to/cam/output \
+    --name-map '{"PRECT": "pr", "TMQ": "prw", "LHFLX": "hfls", "SHFLX": "hfss"}' \
+    --obs-dir data/obs \
+    --output output/my_cam_run
+```
+
 ### Required variables
 
 To score all 16 CMAT variables, provide these raw fields. pyCMAT derives
@@ -320,7 +405,7 @@ For models using different internal names, add `--name-map`:
 ```bash
 python run_cmat.py score \
     --data-dir /path/to/cam/output \
-    --name-map '{"PRECT": "pr", "TMQ": "prw", "LHFLX": "hfls", "SHFLX": "hfss"}' \
+    --name-map '{"TMQ": "prw", "LHFLX": "hfls", "SHFLX": "hfss"}' \
     --obs-dir data/obs \
     --output output/my_cam_run
 ```
@@ -361,7 +446,8 @@ pyCMAT assumes CMIP6-standard SI units. Common pitfalls:
 
 ### Minimal post-processing example (CESM/CAM)
 
-For CESM `.cam.h0.` monthly history files, extract and rename with xarray:
+If you need to pre-process CESM `.cam.h0.` files into the `--data-dir`
+format rather than using `--noresm-case`, extract and rename with xarray:
 
 ```python
 import xarray as xr
@@ -398,6 +484,8 @@ for cam_name, cmip6_name in cam_to_cmip6.items():
 `rsus` is absent for r1i1p1f1 on the Pangeo GCS mirror; NorESM2-LM was
 scored using r2i1p1f1. The paper likely used r1i1p1f1. To reproduce the
 paper's member exactly, fetch `rsus` for r1i1p1f1 directly from ESGF.
+Note: this only affects the CMIP6 GCS backend — the `--noresm-case` backend
+reads `rsus` directly from the h0 files (derived as `FSDS − FSNS`).
 
 ### Period mismatch
 

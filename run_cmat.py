@@ -56,11 +56,18 @@ def cli(verbose: bool) -> None:
 # --- Data source: local directory (takes priority if provided) ---
 @click.option("--data-dir",   default=None, type=click.Path(exists=True),
               help="Local directory of NetCDF files to score. "
-                   "Mutually exclusive with --model/--experiment/--member.")
+                   "Mutually exclusive with --model/--experiment/--member and --noresm-case.")
 @click.option("--name-map",   default=None, type=str,
               help="JSON string mapping local variable names to CMIP6 names, "
-                   'e.g. \'{"TMQ": "prw", "LHFLX": "hfls"}\'. '
+                   '(e.g. \'{"TMQ": "prw", "LHFLX": "hfls"}\'). '
                    "Only needed if auto-detection fails.")
+# --- Data source: NorESM case directory ---
+@click.option("--noresm-case", default=None, type=click.Path(exists=True),
+              help="Root NorESM case output directory containing atm/hist/*.cam.h0.*.nc "
+                   "files.  Variable mapping and surface-flux derivations are performed "
+                   "automatically.  Mutually exclusive with --data-dir and --model.")
+@click.option("--noresm-stream", default="cam.h0", show_default=True,
+              help="CAM history stream to read (default: cam.h0 = monthly mean).")
 # --- Data source: CMIP6 GCS ---
 @click.option("--model",      default=None,
               help="CMIP6 source_id for GCS access, e.g. CESM2. "
@@ -99,7 +106,7 @@ def cli(verbose: bool) -> None:
               help="Generate annual-mean bias map PNGs for each scored variable "
                    "(saved to <output>/bias_maps/). Requires cartopy.")
 def score(
-    data_dir, name_map, model, experiment, member,
+    data_dir, name_map, noresm_case, noresm_stream, model, experiment, member,
     benchmark_model, benchmark_member,
     year_start, year_end, output, obs_dir, no_plots, clobber, cache_dir, no_cache, bias_maps
 ) -> None:
@@ -108,9 +115,11 @@ def score(
 
     \b
     Data source (choose one):
-      --data-dir   Score a local directory of NetCDF files (dev runs, post-
-                   processed history files, any format auto-detected).
-      --model      Fetch from the CMIP6 GCS mirror via intake-esm.
+      --data-dir      Score a local directory of NetCDF files (dev runs, post-
+                      processed history files, any format auto-detected).
+      --noresm-case   Score a NorESM case directory directly (raw CAM h0 history
+                      files, variable mapping applied automatically).
+      --model         Fetch from the CMIP6 GCS mirror via intake-esm.
 
     \b
     Optionally compare against a CMIP6 reference:
@@ -119,13 +128,14 @@ def score(
 
     Results are written as scores.json plus PNG diagnostic plots.
     """
-    if data_dir is None and model is None:
+    sources = sum([data_dir is not None, noresm_case is not None, model is not None])
+    if sources == 0:
         raise click.UsageError(
-            "Provide either --data-dir (local NetCDF) or --model (CMIP6 GCS)."
+            "Provide one of: --data-dir, --noresm-case, or --model."
         )
-    if data_dir is not None and model is not None:
+    if sources > 1:
         raise click.UsageError(
-            "--data-dir and --model are mutually exclusive."
+            "--data-dir, --noresm-case, and --model are mutually exclusive."
         )
 
     output_path = Path(output)
@@ -145,6 +155,13 @@ def score(
         run_label = Path(data_dir).name
         log.info("Scoring local run: %s (%d-%d)", data_dir, *year_range)
         loader = CmatLoader.from_local(data_dir, year_range=year_range, name_map=extra_map)
+    elif noresm_case is not None:
+        run_label = Path(noresm_case).name
+        log.info("Scoring NorESM case: %s  stream=%s  (%d-%d)",
+                 noresm_case, noresm_stream, *year_range)
+        loader = CmatLoader.from_noresm_case(
+            noresm_case, year_range=year_range, stream=noresm_stream
+        )
     else:
         run_label = f"{model}_{member}"
         log.info("Scoring CMIP6: %s %s %s (%d-%d)", model, experiment, member, *year_range)
@@ -178,8 +195,8 @@ def score(
     # Attach run metadata so the report command can display it
     results.setdefault("metadata", {})
     results["metadata"]["run_label"]  = run_label
-    results["metadata"]["model"]      = model or run_label
-    results["metadata"]["experiment"] = experiment
+    results["metadata"]["model"]      = model or noresm_case or run_label
+    results["metadata"]["experiment"] = experiment if model else ("noresm_case" if noresm_case else "local")
     results["metadata"]["member"]     = member
     results["metadata"]["year_range"] = list(year_range)
 
