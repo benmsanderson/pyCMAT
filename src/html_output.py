@@ -196,7 +196,7 @@ def _page_html(
 """
 
 
-def _build_table_rows(model_order: list[str], scores_dict: dict, var_grades: dict) -> str:
+def _build_table_rows(model_order: list[str], scores_dict: dict, var_grades: dict, link_detail: bool = True) -> str:
     """Build HTML table rows for the given model ordering."""
     rows = []
     from config import REALM_VARS
@@ -229,6 +229,8 @@ def _build_table_rows(model_order: list[str], scores_dict: dict, var_grades: dic
         member     = meta.get("member", "")
         subtitle   = " ".join(filter(None, [experiment, member]))
 
+        model_link = f'<a href="{m}.html">{run_label}</a>' if link_detail else run_label
+
         # Delta scores (improvements vs benchmark)
         deltas = sd.get("delta_scores") or {}
         improvements = [f"+{v}: {d:+.3f}" for v, d in deltas.items() if d >  0.05]
@@ -251,14 +253,14 @@ def _build_table_rows(model_order: list[str], scores_dict: dict, var_grades: dic
 
         rows.append(
             f"  <tr>"
-            f'<td><strong>{run_label}</strong>'
+            f'<td><strong>{model_link}</strong>'
             + (f'<br><span class="note">{subtitle}</span>' if subtitle else "")
             + (f'<br><span class="note">{delta_html}</span>' if delta_html else "")
-            + f"</td>"
+            + "</td>"
             + sc(osc) + sc(esc) + sc(wsc) + sc(dsc)
             + f'<td class="grade-cell">{ogr} / {egr} / {wgr} / {dgr}</td>'
             + sc(asc) + sc(ssc) + sc(nsc)
-            + f"</tr>"
+            + "</tr>"
         )
     return "\n".join(rows)
 
@@ -276,6 +278,7 @@ def generate_index_pages(
     output_dir: Path,
     archive_label: str = "CMIP6",
     image_dir: Path | None = None,
+    scores_base_dir: Path | None = None,
 ) -> list[Path]:
     """
     Write all HTML index pages for a CMAT repository.
@@ -291,6 +294,10 @@ def generate_index_pages(
         Label used in page titles (e.g. 'CMIP6').
     image_dir : Path or None
         Directory where colortable PNG files live.  Defaults to output_dir.
+    scores_base_dir : Path or None
+        Root directory of per-model score output (e.g. 'output/').  Used to
+        locate bias_maps subdirectories to copy into the report.  If None,
+        bias map thumbnails are omitted from per-model pages.
 
     Returns
     -------
@@ -298,8 +305,8 @@ def generate_index_pages(
     """
     import sys
     import os
+    import shutil
     sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-    from config import REALM_VARS
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -314,7 +321,40 @@ def generate_index_pages(
         pcors = sd.get("pattern_correlations", {})
         var_grades[m] = {v: _variable_grade(v, pcors.get(v, {})) for v in pcors}
 
-    # Sort configurations
+    # ---------------------------------------------------------------------------
+    # Copy bias maps into report dir and generate per-model detail pages
+    # ---------------------------------------------------------------------------
+    bias_maps_copied: dict[str, str] = {}  # model_name -> rel path from output_dir
+    for m in scores_dict:
+        bias_src: Path | None = None
+        if scores_base_dir is not None:
+            candidate = Path(scores_base_dir) / m / "bias_maps"
+            if candidate.is_dir():
+                bias_src = candidate
+        if bias_src is not None:
+            dest_dir = output_dir / "bias_maps" / m
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            for png in bias_src.glob("*.png"):
+                shutil.copy2(png, dest_dir / png.name)
+            bias_maps_copied[m] = f"bias_maps/{m}"
+
+        bias_rel = bias_maps_copied.get(m)  # None if no maps
+        generate_model_page(
+            model_name=m,
+            score_data=scores_dict[m],
+            output_dir=output_dir,
+            bias_maps_rel_dir=bias_rel,
+            archive_label=archive_label,
+        )
+
+    written: list[Path] = []
+    # Re-collect per-model pages (already written above; track them)
+    for m in scores_dict:
+        p = output_dir / f"{m}.html"
+        if p.exists():
+            written.append(p)
+
+    # Sort configurations for the 7 aggregate index pages
     pages = [
         ("index",          "Overall",  "overall"),
         ("index_Energy",   "Energy",   "energy"),
@@ -324,8 +364,6 @@ def generate_index_pages(
         ("index_Seasonal", "Seasonal", "seasonal"),
         ("index_ENSO",     "ENSO",     "enso"),
     ]
-
-    written: list[Path] = []
 
     for page_key, sort_label, sort_by in pages:
         # Sort models by the chosen score, descending (best at top of table)
@@ -363,4 +401,159 @@ def generate_index_pages(
         written.append(out_file)
 
     return written
+
+
+# ---------------------------------------------------------------------------
+# Per-model detail page
+# ---------------------------------------------------------------------------
+
+_VAR_LABELS = {
+    "rsnt":    "SWNET_TOA",  "rlut":    "LWNET_TOA", "swcftoa": "SW_CF",
+    "lwcftoa": "LW_CF",      "fs":      "Fs",         "rtfs":    "RT-Fs",
+    "pr":      "P",          "prw":     "PRW",         "hurs":    "RH_sfc",
+    "hfls":    "LH",         "ep":      "E-P",
+    "psl":     "SLP",        "sfcWind": "U_sfc",       "zg500":   "Z500",
+    "wap500":  "W500",       "hur500":  "RH500",
+}
+
+_REALM_ORDER = [
+    ("energy",   ["rsnt", "rlut", "swcftoa", "lwcftoa", "fs", "rtfs"]),
+    ("water",    ["pr", "prw", "hurs", "hfls", "ep"]),
+    ("dynamics", ["psl", "sfcWind", "zg500", "wap500", "hur500"]),
+]
+
+_REALM_CSS_COLORS = {
+    "energy":   "#882222",
+    "water":    "#224488",
+    "dynamics": "#226622",
+}
+
+
+def generate_model_page(
+    model_name: str,
+    score_data: dict,
+    output_dir: Path,
+    bias_maps_rel_dir: str | None = None,
+    archive_label: str = "CMIP6",
+) -> Path:
+    """
+    Write a per-model HTML detail page listing per-variable pattern correlations
+    and bias map thumbnails.
+
+    Parameters
+    ----------
+    model_name : str
+        Display name / run label for the model.
+    score_data : dict
+        Content of that model's scores.json.
+    output_dir : Path
+        Directory to write the HTML file (same as the report dir).
+    bias_maps_rel_dir : str or None
+        Path to the directory containing bias map PNGs, relative to output_dir.
+        E.g. 'bias_maps/CESM2'. If None, no images are shown.
+    archive_label : str
+        Archive label for the page title.
+    """
+    output_dir = Path(output_dir)
+    meta        = score_data.get("metadata", {})
+    pcors       = score_data.get("pattern_correlations", {})
+    scores      = score_data.get("scores", {})
+    experiment  = meta.get("experiment", "")
+    member      = meta.get("member", "")
+    year_range  = meta.get("year_range", [])
+    subtitle    = " ".join(filter(None, [experiment, member] +
+                                  ([f"{year_range[0]}-{year_range[1]}"] if year_range else [])))
+
+    nav_links = " | ".join(
+        f'<a href="{k}.html">{label}</a>'
+        for k, label in _NAV_KEYS
+    )
+
+    rows_html = []
+    for realm, var_list in _REALM_ORDER:
+        rcol = _REALM_CSS_COLORS[realm]
+        rows_html.append(
+            f'<tr><td colspan="6" style="background:{rcol};color:#fff;'
+            f'font-weight:bold;padding:3px 6px">'
+            f'{realm.upper()}</td></tr>'
+        )
+        for var in var_list:
+            vp = pcors.get(var, {})
+            ann  = vp.get("annual",   float("nan"))
+            seas = vp.get("seasonal", float("nan"))
+            enso = vp.get("enso",     float("nan"))
+            vscore = scores.get("variable", {}).get(var, float("nan"))
+
+            grade_idx = _variable_grade(var, vp)
+            grade_letter = _grade_scale_letter(grade_idx)
+            grade_bg = _grade_color(grade_idx)
+
+            # Bias map thumbnail cell
+            if bias_maps_rel_dir:
+                img_file = f"{bias_maps_rel_dir}/{var}_annual_bias.png"
+                img_cell = f'<td style="text-align:center"><a href="{img_file}" target="_blank"><img src="{img_file}" style="height:60px;max-width:160px;vertical-align:middle" alt="{var} bias map" onerror="this.style.display=\'none\'"></a></td>'
+            else:
+                img_cell = "<td>—</td>"
+
+            def sc(val):
+                bg   = _score_color(val)
+                text = _fmt_score(val)
+                return f'<td style="text-align:center;background:{bg};color:#fff;font-weight:bold">{text}</td>'
+
+            label = _VAR_LABELS.get(var, var.upper())
+            rows_html.append(
+                f"  <tr>"
+                f'<td style="font-weight:bold">{label}</td>'
+                + sc(ann) + sc(seas) + sc(enso) + sc(vscore)
+                + f'<td style="text-align:center;background:{grade_bg};color:#fff;font-weight:bold">{grade_letter}</td>'
+                + img_cell
+                + "</tr>"
+            )
+
+    created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    realm_scores = scores.get("realm") or {}
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CMAT {archive_label} — {model_name}</title>
+<style>{_CSS}
+table.detail th {{background:#dde;padding:5px 8px;border:1px solid #aaa;}}
+table.detail td {{padding:4px 6px;border:1px solid #ccc;}}
+</style>
+</head>
+<body>
+<h1>CMAT 1.0 {archive_label} — {model_name}</h1>
+<p class="subtitle">{subtitle}<br>Created: {created}</p>
+<div class="nav"><a href="index.html">&laquo; Back to index</a> | {nav_links}</div>
+<hr>
+<p>
+  Overall: <strong>{_fmt_score(scores.get('overall', float('nan')))}</strong> &nbsp;
+  Energy: <strong>{_fmt_score(realm_scores.get('energy', float('nan')))}</strong> &nbsp;
+  Water: <strong>{_fmt_score(realm_scores.get('water', float('nan')))}</strong> &nbsp;
+  Dynamics: <strong>{_fmt_score(realm_scores.get('dynamics', float('nan')))}</strong>
+</p>
+<table class="detail" style="border-collapse:collapse;font-size:12px">
+  <thead>
+    <tr>
+      <th>Variable</th>
+      <th>Annual R</th>
+      <th>Seasonal R</th>
+      <th>ENSO R</th>
+      <th>Score</th>
+      <th>Grade</th>
+      <th>Annual Bias Map</th>
+    </tr>
+  </thead>
+  <tbody>
+{''.join(rows_html)}
+  </tbody>
+</table>
+</body>
+</html>
+"""
+    out_path = output_dir / f"{model_name}.html"
+    out_path.write_text(html, encoding="utf-8")
+    return out_path
 

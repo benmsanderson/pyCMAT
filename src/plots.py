@@ -251,8 +251,51 @@ def plot_colortable(
 
 
 # ---------------------------------------------------------------------------
-# Bias map stub (requires cartopy — Phase 4)
+# Bias map (Phase 4) — requires cartopy
 # ---------------------------------------------------------------------------
+
+def _get_lat_lon(da):
+    """Return (lat_name, lon_name) coordinate names for a DataArray."""
+    for lat_cand in ("lat", "latitude"):
+        for lon_cand in ("lon", "longitude"):
+            if lat_cand in da.coords and lon_cand in da.coords:
+                return lat_cand, lon_cand
+    raise ValueError(f"Cannot find lat/lon coords in {list(da.coords)}")
+
+
+def _norm_coords(da):
+    """Rename latitude/longitude → lat/lon if needed; drop pressure level."""
+    renames = {}
+    if "latitude" in da.dims:
+        renames["latitude"] = "lat"
+    if "longitude" in da.dims:
+        renames["longitude"] = "lon"
+    if renames:
+        da = da.rename(renames)
+    # Drop any scalar pressure-level coordinate
+    for c in list(da.coords):
+        if c in ("level", "plev", "pressure") and da.coords[c].ndim == 0:
+            da = da.drop_vars(c)
+    return da
+
+
+def _draw_map_panel(ax, data, cmap, norm, lat, lon, title_str, units, cbar_label):
+    """Fill one geographic panel; return the mappable for the colorbar."""
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
+    ax.set_global()
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.5, edgecolor="0.3")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.3, edgecolor="0.5")
+    mesh = ax.pcolormesh(
+        lon, lat, data,
+        cmap=cmap, norm=norm,
+        transform=ccrs.PlateCarree(),
+        rasterized=True,
+    )
+    ax.set_title(title_str, fontsize=8, pad=3)
+    return mesh
+
 
 def plot_bias_map(
     model_field,
@@ -264,12 +307,137 @@ def plot_bias_map(
     hatch_mask=None,
 ) -> None:
     """
-    Three-panel bias map: model mean, obs, and bias with zonal mean panels.
-    Requires cartopy (not yet installed).
+    Four-panel bias figure: obs climatology | model climatology | bias (model-obs)
+    | zonal mean comparison (line plot).
+
+    Parameters
+    ----------
+    model_field : xarray.DataArray
+        Model field, (time, lat, lon) or (lat, lon). Time mean is taken automatically.
+    obs_field : xarray.DataArray
+        Observational field on the same or different grid.
+    title : str
+        Top-level figure title.
+    output_path : str
+        Output PNG path.
+    units : str
+        Physical units for colorbar labels.
+    stipple_mask : np.ndarray or None
+        2D boolean array (lat × lon on the model grid) — True where bias is
+        statistically significant. Plotted as black dots on the bias panel.
+    hatch_mask : np.ndarray or None
+        Alternative significance mask plotted as hatching (not both).
     """
-    raise NotImplementedError(
-        "plot_bias_map requires cartopy.  Install cartopy and implement in Phase 4."
+    import cartopy.crs as ccrs
+
+    # --- Normalize coordinates -------------------------------------------------
+    model_field = _norm_coords(model_field)
+    obs_field   = _norm_coords(obs_field)
+
+    # --- Time mean -------------------------------------------------------------
+    if "time" in model_field.dims:
+        model_m = model_field.mean("time").load()
+    else:
+        model_m = model_field.load()
+    if "time" in obs_field.dims:
+        obs_m = obs_field.mean("time").load()
+    else:
+        obs_m = obs_field.load()
+
+    # --- Align on the model grid (obs may be at different resolution) ----------
+    obs_m_rg = obs_m.interp(lat=model_m.lat, lon=model_m.lon, method="linear")
+    bias = model_m - obs_m_rg
+
+    lat = model_m.lat.values
+    lon = model_m.lon.values
+
+    # --- Color ranges ----------------------------------------------------------
+    # Use the 3rd-97th percentile of combined obs+model to set the shared map range
+    combined = np.concatenate([obs_m.values.ravel(), model_m.values.ravel()])
+    finite   = combined[np.isfinite(combined)]
+    vmin = float(np.percentile(finite, 3))
+    vmax = float(np.percentile(finite, 97))
+
+    bias_vals = bias.values.ravel()
+    bias_finite = bias_vals[np.isfinite(bias_vals)]
+    bmax = float(np.percentile(np.abs(bias_finite), 97)) if bias_finite.size else 1.0
+
+    # Colormaps
+    cmap_field = plt.cm.viridis
+    cmap_bias  = plt.cm.RdBu_r
+    norm_field = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    norm_bias  = mcolors.TwoSlopeNorm(vmin=-bmax, vcenter=0.0, vmax=bmax)
+
+    proj = ccrs.Robinson()
+
+    # --- Layout: 3 map panels + 1 zonal-mean panel ----------------------------
+    fig = plt.figure(figsize=(16, 4.5))
+    fig.suptitle(title, fontsize=11, y=1.01)
+
+    # 3 geographic subplots + 1 line-plot
+    axes_map = [
+        fig.add_subplot(1, 4, 1, projection=proj),
+        fig.add_subplot(1, 4, 2, projection=proj),
+        fig.add_subplot(1, 4, 3, projection=proj),
+    ]
+    ax_zm = fig.add_subplot(1, 4, 4)
+
+    # Panel 1: obs
+    m1 = _draw_map_panel(
+        axes_map[0], obs_m.values, cmap_field, norm_field,
+        obs_m.lat.values, obs_m.lon.values,
+        f"OBS ({units})", units, units,
     )
+    # Panel 2: model
+    _ = _draw_map_panel(
+        axes_map[1], model_m.values, cmap_field, norm_field,
+        lat, lon,
+        f"Model ({units})", units, units,
+    )
+    # Panel 3: bias
+    m3 = _draw_map_panel(
+        axes_map[2], bias.values, cmap_bias, norm_bias,
+        lat, lon,
+        f"Bias: Model − OBS ({units})", units, units,
+    )
+    # Stippling / hatching on bias panel
+    if stipple_mask is not None:
+        import cartopy.crs as _ccrs
+        yy, xx = np.where(stipple_mask)
+        axes_map[2].scatter(
+            lon[xx], lat[yy], s=0.5, c="k", alpha=0.4,
+            transform=_ccrs.PlateCarree(), zorder=5,
+        )
+    elif hatch_mask is not None:
+        pass  # reserved for future hatching implementation
+
+    # Colorbars below maps 1+2 (shared) and map 3
+    fig.colorbar(m1, ax=axes_map[:2], orientation="horizontal",
+                  pad=0.03, fraction=0.04, label=units, shrink=0.9)
+    fig.colorbar(m3, ax=axes_map[2], orientation="horizontal",
+                  pad=0.03, fraction=0.04, label=units, shrink=0.9)
+
+    # --- Panel 4: zonal mean --------------------------------------------------
+    model_zm = model_m.mean("lon").values
+    obs_zm   = obs_m.interp(lat=model_m.lat, method="linear").mean("lon").values
+    lat_zm   = lat
+
+    ax_zm.plot(obs_zm,   lat_zm, "b-",  linewidth=1.5, label="OBS")
+    ax_zm.plot(model_zm, lat_zm, "r--", linewidth=1.5, label="Model")
+    ax_zm.fill_betweenx(lat_zm, obs_zm, model_zm, alpha=0.15, color="gray")
+    ax_zm.axvline(0, color="k", linewidth=0.5)
+    ax_zm.set_ylim(-90, 90)
+    ax_zm.set_yticks([-60, -30, 0, 30, 60])
+    ax_zm.set_yticklabels(["60°S", "30°S", "0°", "30°N", "60°N"], fontsize=7)
+    ax_zm.set_xlabel(units, fontsize=8)
+    ax_zm.set_title("Zonal Mean", fontsize=8, pad=3)
+    ax_zm.legend(fontsize=7, frameon=False)
+    ax_zm.grid(True, linewidth=0.4, color="0.8")
+    ax_zm.tick_params(labelsize=7)
+
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------

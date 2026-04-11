@@ -95,10 +95,13 @@ def cli(verbose: bool) -> None:
                    "Fields are saved under <cache-dir>/<model>/<experiment>/<member>/")
 @click.option("--no-cache",   is_flag=True, default=False,
               help="Disable local caching of CMIP6 GCS downloads (always re-streams from GCS)")
+@click.option("--bias-maps",  is_flag=True, default=False,
+              help="Generate annual-mean bias map PNGs for each scored variable "
+                   "(saved to <output>/bias_maps/). Requires cartopy.")
 def score(
     data_dir, name_map, model, experiment, member,
     benchmark_model, benchmark_member,
-    year_start, year_end, output, obs_dir, no_plots, clobber, cache_dir, no_cache
+    year_start, year_end, output, obs_dir, no_plots, clobber, cache_dir, no_cache, bias_maps
 ) -> None:
     """
     Compute CMAT scores for a single model simulation.
@@ -169,6 +172,7 @@ def score(
         loader,
         obs_dir=obs_dir,
         benchmark_loader=benchmark_loader,
+        save_bias_maps=(output_path / "bias_maps") if bias_maps else None,
     )
 
     # Attach run metadata so the report command can display it
@@ -274,6 +278,7 @@ def report(scores_dir, archive, output) -> None:
         output_dir=output_path,
         archive_label=archive,
         image_dir=output_path,
+        scores_base_dir=scores_path,
     )
     for p in written:
         log.info("  Wrote %s", p.name)

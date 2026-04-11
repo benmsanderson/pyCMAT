@@ -19,12 +19,13 @@ comparable to published values in the paper.
 | CMIP6 GCS scoring (Pangeo) | **Working** |
 | CMIP6 disk cache | **Working** |
 | Observational reference data (26 files) | **Working** |
-| CLI: `score`, `fetch-obs`, `check-data` | **Working** |
-| CESM2 historical validated | **0.746 overall** (target ~0.81) |
-| Diagnostic plots | Not yet implemented |
-| HTML report output | Not yet implemented |
+| CLI: `score`, `fetch-obs`, `check-data`, `report` | **Working** |
+| CESM2 historical validated | **0.846 overall** (paper: 0.86) |
+| NorESM2-LM historical validated | **0.761 overall** (paper: 0.74, r2i1p1f1) |
+| Color table plots (7 PNGs) | **Working** |
+| HTML report output (7 pages) | **Working** |
+| Bias map plots | In progress (Phase 4) |
 | EOF/bias analysis | Not yet implemented |
-| CLI: `report` | Stub only |
 
 ---
 
@@ -121,8 +122,12 @@ Results are written to `<output>/scores.json`:
 }
 ```
 
-Current CESM2 historical result: **0.746 overall** (target ~0.81, Fasullo et al. 2020 Table 1).
-The gap is concentrated in `fs`, `rtfs`, and `ep` which have near-zero or negative seasonal/ENSO correlations — see Known Issues below.
+Validated results vs Fasullo et al. 2020 Table 1:
+
+| Model | Score | Paper |
+|-------|-------|-------|
+| CESM2 (r1i1p1f1) | **0.846** | 0.86 |
+| NorESM2-LM (r2i1p1f1) | **0.761** | 0.74 |
 
 ---
 
@@ -194,43 +199,42 @@ Disable caching: `--no-cache`
 python run_cmat.py score      Score a model against observations
 python run_cmat.py fetch-obs  Download observational reference data
 python run_cmat.py check-data Check which obs/model files are available
-python run_cmat.py report     [stub] Generate HTML report
+python run_cmat.py report     Generate color table PNGs + HTML index pages
 
 python run_cmat.py score --help    # see all options
 python run_cmat.py fetch-obs --help
 ```
 
+### 6. Generate HTML report
+
+After scoring one or more models, aggregate their `scores.json` files into 7
+HTML index pages (overall, energy, water, dynamics, annual, seasonal, ENSO)
+plus 7 matching color table PNG heatmaps:
+
+```bash
+python run_cmat.py report --scores-dir output --report-dir report
+```
+
+Output goes to `report/` (gitignored). Open `report/index.html` in a browser.
+
 ---
 
 ## Not Yet Implemented
 
-- **Diagnostic plots** (`src/plots.py`): color table heatmap, per-variable
-  map and zonal mean bias plots with stippling
-- **HTML report** (`src/html_output.py`): sortable multi-model index pages
+- **Bias map plots** (`src/plots.py` `plot_bias_map()`): per-variable 3-panel
+  maps (model mean / obs / bias) with zonal mean insets — requires cartopy (Phase 4)
 - **EOF/bias analysis** (`src/eof_analysis.py`): bias PC decomposition
   analogous to Fig. 9 in Fasullo et al. (2020)
-- **`report` command**: aggregate multiple `scores.json` files into HTML
 
 ---
 
 ## Known Issues
 
-### Score gap vs Fasullo et al. 2020
+### NorESM2-LM ensemble member
 
-CESM2 historical scores 0.746 vs the paper's ~0.81. The gap is driven by
-three variables whose seasonal and/or ENSO correlations are near-zero or negative:
-
-| Variable | Annual R | Seasonal R | ENSO R | Score |
-|----------|----------|------------|--------|-------|
-| `fs`     | 0.805    | -0.213     | -0.170 | 0.143 |
-| `rtfs`   | 0.920    | -0.066     | -0.055 | 0.269 |
-| `ep`     | 0.913    | 0.060      | 0.034  | 0.338 |
-
-The annual correlations are now physically reasonable. The sub-annual
-correlations are likely poor because the obs for these variables are derived
-residuals (CERES surface radiation minus ERA5 turbulent fluxes), and the
-seasonal/ENSO signals in that residual do not match the model well. The paper
-may use a different obs source or a different derivation for these variables.
+`rsus` is absent for r1i1p1f1 on the Pangeo GCS mirror; NorESM2-LM was
+scored using r2i1p1f1. The paper likely used r1i1p1f1. To reproduce the
+paper's member exactly, fetch `rsus` for r1i1p1f1 directly from ESGF.
 
 ### Period mismatch
 

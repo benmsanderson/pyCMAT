@@ -166,6 +166,7 @@ def run_scoring_pipeline(
     obs_dir: str | Path,
     scored_vars: Optional[list] = None,
     benchmark_loader=None,
+    save_bias_maps: str | Path | None = None,
 ) -> dict:
     """
     Run the full CMAT scoring pipeline.
@@ -180,6 +181,9 @@ def run_scoring_pipeline(
         Subset of CMAT variable names to score.  Defaults to all 16 variables.
     benchmark_loader : CmatLoader or None
         If provided, also score the benchmark model and include delta scores.
+    save_bias_maps : str, Path, or None
+        If provided, write annual-mean bias map PNGs to this directory.
+        Requires cartopy.
 
     Returns
     -------
@@ -260,6 +264,10 @@ def run_scoring_pipeline(
     # ------------------------------------------------------------------
     pcors: dict[str, dict] = {}
 
+    # Collect annual means for bias map generation (populated in loop below)
+    _bmap_model: dict[str, xr.DataArray] = {}
+    _bmap_obs:   dict[str, xr.DataArray] = {}
+
     # Load obs SST for ENSO Niño3.4 index (ERA5 ts)
     obs_sst: Optional[xr.DataArray] = None
     _obs_ts = _load_obs("ts", obs_dir)
@@ -293,6 +301,11 @@ def run_scoring_pipeline(
                     obs_regridded = remove_zonal_mean(obs_regridded)
                 obs_clims = _compute_obs_climatology(obs_regridded, obs_sst, timescale)
                 r = pattern_cor(m_clim, obs_clims)
+
+                # Collect annual fields for bias maps
+                if save_bias_maps and timescale == "annual":
+                    _bmap_model[var] = m_clim
+                    _bmap_obs[var]   = obs_clims
             else:
                 r = float("nan")
 
@@ -316,6 +329,12 @@ def run_scoring_pipeline(
              scores["realm"].get("water", float("nan")),
              scores["realm"].get("dynamics", float("nan")))
     log.info("  Overall score: %.3f", scores["overall"])
+
+    # ------------------------------------------------------------------
+    # Step 4b: Generate annual-mean bias map PNGs (optional)
+    # ------------------------------------------------------------------
+    if save_bias_maps and _bmap_model:
+        _write_bias_maps(_bmap_model, _bmap_obs, Path(save_bias_maps))
 
     # ------------------------------------------------------------------
     # Step 5: Optionally score benchmark and compute deltas
@@ -344,6 +363,43 @@ def run_scoring_pipeline(
             "n_vars_scored": len(pcors),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Bias map generation helper
+# ---------------------------------------------------------------------------
+
+def _write_bias_maps(
+    model_fields: dict,
+    obs_fields: dict,
+    out_dir: Path,
+) -> None:
+    """Generate annual-mean bias map PNGs for each variable and save to out_dir."""
+    try:
+        from src.plots import plot_bias_map, _VAR_LABELS
+    except ImportError as exc:
+        log.error("Cannot import plot_bias_map: %s", exc)
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for var, model_da in model_fields.items():
+        obs_da = obs_fields.get(var)
+        if obs_da is None:
+            continue
+        units = VARIABLES.get(var, {}).get("units", "")
+        label = _VAR_LABELS.get(var, var.upper())
+        out_path = out_dir / f"{var}_annual_bias.png"
+        try:
+            plot_bias_map(
+                model_field=model_da,
+                obs_field=obs_da,
+                title=f"Annual Mean — {label}",
+                output_path=str(out_path),
+                units=units,
+            )
+            log.info("  Bias map written: %s", out_path.name)
+        except Exception as exc:
+            log.warning("  Bias map failed for %s: %s", var, exc)
 
 
 # ---------------------------------------------------------------------------
