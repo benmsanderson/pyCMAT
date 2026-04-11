@@ -465,23 +465,7 @@ for cam_name, cmip6_name in cam_to_cmip6.items():
 | Bias map plots | **Working** |
 | EOF/bias PC decomposition | Not yet implemented (needs ensemble of models) |
 | Score distribution whisker plots | Not yet implemented (needs ensemble of models) |
----
-## Known Issues
-
-### NorESM2-LM ensemble member
-
-`rsus` is absent for r1i1p1f1 on the Pangeo GCS mirror; NorESM2-LM was
-scored using r2i1p1f1. The paper likely used r1i1p1f1. To reproduce the
-paper's member exactly, fetch `rsus` for r1i1p1f1 directly from ESGF.
-Note: this only affects the CMIP6 GCS backend — the `--noresm-case` backend
-reads `rsus` directly from the h0 files (derived as `FSDS − FSNS`).
-
-### Period mismatch
-
-Model period 1995-2014 vs obs period 2001-2020. Pattern correlations are
-spatial so the mismatch affects the climatological state but not the
-correlation method. A 2001-2014 overlap period would be stricter.
-
+]
 ---
 
 ## Data Directory Layout
