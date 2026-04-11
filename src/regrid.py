@@ -334,8 +334,11 @@ def _extract_latlon_arrays(
     lat = da[lat_name].values
     lon = da[lon_name].values % 360  # normalise to 0-360
 
-    # If 1D, broadcast to 2D to match unstructured/flat layout expected below
-    if lat.ndim == 1 and lon.ndim == 1:
+    # For regular grids, lat and lon are 1D axes of different lengths (nlat, nlon).
+    # Broadcast them to 2D so pyresample / griddata receive consistent (N,) arrays.
+    # For unstructured grids (SE/CAM-SE, cubed-sphere), lat and lon are paired 1D
+    # arrays of the same length (ncol) — do NOT meshgrid; pass them as-is.
+    if lat.ndim == 1 and lon.ndim == 1 and lat.shape != lon.shape:
         lon, lat = np.meshgrid(lon, lat)
 
     return lat, lon

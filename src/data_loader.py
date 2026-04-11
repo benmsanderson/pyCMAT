@@ -286,16 +286,30 @@ class CmatLoader:
 
         # Fix CAM's end-of-period time convention: CAM writes the time stamp at
         # the first instant of the NEXT month (e.g. the Jan 1950 monthly mean has
-        # time = 1950-02-01 00:00).  Use the lower bound from time_bnds (= the
-        # first day of the averaging month) as the canonical time coordinate so
-        # that year-based slicing works correctly and season labels match data.
-        if "time_bnds" in ds.coords or "time_bnds" in ds:
-            t0 = ds["time_bnds"].isel(nbnd=0)
+        # time = 1950-02-01 00:00).  Use the lower bound from time_bnds/time_bounds
+        # (= the first day of the averaging month) as the canonical time coordinate
+        # so that year-based slicing works correctly and season labels match data.
+        # The bounds variable name varies by stream: h0 uses 'time_bnds',
+        # h0a/h0b use 'time_bounds' (stored as data var, not always a coord).
+        _bnds_name = ds.time.attrs.get("bounds",  # preferred: read from attribute
+                      ds.time.attrs.get("bounds", None))
+        # Also try common fallback names if the attribute is absent
+        if _bnds_name is None:
+            for _candidate in ("time_bnds", "time_bounds"):
+                if _candidate in ds or _candidate in ds.coords:
+                    _bnds_name = _candidate
+                    break
+        if _bnds_name and (_bnds_name in ds or _bnds_name in ds.coords):
+            # nbnd dim is called 'nbnd' or 'd2'; select index 0 = period start
+            _bnds_da = ds[_bnds_name]
+            _nbnd_dim = [d for d in _bnds_da.dims if d != "time"][0]
+            t0 = _bnds_da.isel({_nbnd_dim: 0})
             ds = ds.assign_coords(time=t0.drop_vars("time", errors="ignore"))
-            log.debug("NorESM time coordinate fixed using time_bnds lower bound")
+            log.debug("NorESM time coordinate fixed using %s lower bound", _bnds_name)
         else:
             log.warning(
-                "time_bnds not found in NorESM dataset; time stamps may be off by one month"
+                "No time bounds variable found (tried time_bnds / time_bounds); "
+                "time stamps may be off by one month"
             )
 
         # Drop variables we won't use to save memory
@@ -631,4 +645,12 @@ class CmatLoader:
     def _slice_years(self, da: xr.DataArray) -> xr.DataArray:
         """Subset to the configured year_range (inclusive)."""
         y0, y1 = self.year_range
-        return da.sel(time=slice(str(y0), str(y1)))
+        # Use dt.year comparison rather than string-based slicing so that
+        # years < 1000 (common in piControl and spinup runs) work correctly
+        # with cftime calendars (xarray can't parse "1" or "50" as ISO dates).
+        try:
+            mask = (da.time.dt.year >= y0) & (da.time.dt.year <= y1)
+            return da.isel(time=mask)
+        except AttributeError:
+            # Fallback for non-cftime time axes (numpy datetime64)
+            return da.sel(time=slice(str(y0), str(y1)))
