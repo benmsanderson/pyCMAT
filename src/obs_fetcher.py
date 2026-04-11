@@ -573,48 +573,76 @@ def derive_obs_fs_rtfs(obs_dir: Path) -> list[str]:
     target_lat = np.linspace(-89.5, 89.5, 180)
     target_lon = np.linspace(0.5, 359.5, 360)
 
+    def _normalize_time(da: xr.DataArray) -> xr.DataArray:
+        """Normalize time coordinate to first-of-month so different obs sources align."""
+        if "time" not in da.dims:
+            return da
+        import pandas as pd
+        times = da.time.values
+        if hasattr(times[0], "year"):
+            # cftime objects
+            new_times = np.array([type(t)(t.year, t.month, 1) for t in times])
+        else:
+            # numpy datetime64 (CERES, GPCP, ERA5 after valid_time rename)
+            new_times = pd.DatetimeIndex(times).to_period("M").to_timestamp().to_numpy()
+        return da.assign_coords(time=("time", new_times, da.time.attrs))
+
     def _load_regrid(name):
-        """Load obs file and regrid to 1-degree if needed."""
+        """Load obs time series, normalize timestamps to month-start, regrid to 1° if needed."""
         ds = xr.open_dataset(obs_dir / f"{name}.nc")
         da = ds[name] if name in ds else next(iter(ds.data_vars.values())).rename(name)
         ds.close()
-        # Take the annual mean of the time series to get 2D for spatial checks
-        # but keep time dimension if present for broadcasting
-        da = da.squeeze(drop=True) if "time" not in da.dims else da
-        if "time" in da.dims:
-            da = da.mean("time", keep_attrs=True)
-        # Check if regridding is needed (not 1-degree already)
-        needs_regrid = (len(da.lat) != 180 or len(da.lon) != 360)
+        da = da.squeeze(drop=True)
+        # Normalize timestamps so CERES (15th), ERA5 (1st T06), GPCP (1st) all align
+        da = _normalize_time(da)
+        # Regrid to 1° if needed — xarray.interp broadcasts over the time dimension
+        needs_regrid = (da.sizes.get("lat", 0) != 180 or da.sizes.get("lon", 0) != 360)
         if needs_regrid:
             da = da.interp(lat=target_lat, lon=target_lon, method="linear",
                            kwargs={"fill_value": "extrapolate"})
         return da.rename(name)
 
     comp = {v: _load_regrid(v) for v in needed_fs}
+    # Align all components on the inner time intersection (guards against any
+    # remaining timestamp drift after normalization)
+    if all("time" in c.dims for c in comp.values()):
+        aligned = xr.align(*comp.values(), join="inner")
+        comp = dict(zip(comp.keys(), aligned))
     fs = calc_fs(**comp)
     _write_clim(fs, obs_dir / "fs.nc")
-    log.info("Derived obs fs")
+    log.info("Derived obs fs (monthly time series, %d steps)", fs.sizes.get("time", 1))
 
     written = ["fs"]
 
     if all((obs_dir / f"{v}.nc").exists() for v in needed_extra):
         extra = {v: _load_regrid(v) for v in needed_extra}
-        rtfs = calc_rtfs(extra["rsdt"], extra["rsut"], extra["rlut"], **comp)
+        if all("time" in c.dims for c in extra.values()):
+            all_extra = {**comp, **extra}
+            aligned = xr.align(*all_extra.values(), join="inner")
+            all_extra = dict(zip(all_extra.keys(), aligned))
+            comp_aligned = {k: all_extra[k] for k in comp}
+            extra_aligned = {k: all_extra[k] for k in extra}
+        else:
+            comp_aligned, extra_aligned = comp, extra
+        rtfs = calc_rtfs(extra_aligned["rsdt"], extra_aligned["rsut"],
+                         extra_aligned["rlut"], **comp_aligned)
         _write_clim(rtfs, obs_dir / "rtfs.nc")
         written.append("rtfs")
-        log.info("Derived obs rtfs")
+        log.info("Derived obs rtfs (monthly time series, %d steps)", rtfs.sizes.get("time", 1))
 
     # ep = E - P from hfls + pr
     if (obs_dir / "hfls.nc").exists() and (obs_dir / "pr.nc").exists():
         from src.derived_vars import calc_ep
-        hfls = _load_regrid("hfls")
+        hfls = comp["hfls"] if "hfls" in comp else _load_regrid("hfls")
         pr_raw = _load_regrid("pr")
-        # pr obs is already in mm/day; calc_ep expects kg/m2/s -> convert back
+        if "time" in hfls.dims and "time" in pr_raw.dims:
+            hfls, pr_raw = xr.align(hfls, pr_raw, join="inner")
+        # pr obs is in mm/day; calc_ep expects kg/m2/s → convert, then calc_ep converts back
         pr_kgs = pr_raw / 86400.0
         ep = calc_ep(hfls, pr_kgs)
         _write_clim(ep, obs_dir / "ep.nc")
         written.append("ep")
-        log.info("Derived obs ep")
+        log.info("Derived obs ep (monthly time series, %d steps)", ep.sizes.get("time", 1))
 
     return written
 
