@@ -106,7 +106,16 @@ pyCMAT/
 - [x] Fix intake-esm extra dimensions (`member_id`, `dcpp_init_year`) — squeezed out
 - [x] Fix ENSO time alignment: normalize mid-month vs start-of-month timestamps
 - [x] Fix obs ENSO: use ERA5 `ts` (not model SST) as Niño3.4 source for obs regression
-- [x] CESM2 historical scoring run in progress (caching to `data/model_cache/`)
+- [x] CESM2 historical scoring run complete — 0.746 overall
+- [x] Fix `zg500` obs: zonal mean was not removed from obs before correlation
+      (model had eddy = z - zonal_mean; obs was raw). Fix: added `_EDDY_VARS`
+      set in `pipeline.py`, `remove_zonal_mean()` applied to obs for `zg500`.
+      Result: annual R 0.110 → 0.926, variable score 0.315 → 0.874.
+- [x] Fix ERA5 `hfls`/`hfss` unit factor: ERA5 monthly slhf/sshf are
+      J m-2 day-1 (daily accumulated), not J m-2 hr-1. Factor corrected from
+      `-1/3600` to `-1/86400` in `obs_fetcher.py`. Stored files corrected
+      in-place; `ep`, `fs`, `rtfs` re-derived from corrected fields.
+      Result: `fs` annual R 0.128 → 0.805; `ep` annual R 0.466 → 0.913.
 
 ### Phase 3: Output and visualisation — TODO
 - [ ] `plots.py`: color table heatmap, per-variable map and zonal mean bias plots
@@ -115,11 +124,17 @@ pyCMAT/
 - [ ] `report` CLI command: aggregate multiple scores.json into HTML
 
 ### Phase 4: Validation
-- [ ] Confirm CESM2 overall score ~0.81 (Fasullo et al. 2020, Table 1)
-- [ ] Investigate `fs` correlations (annual=0.13, seasonal=-0.11 in first run;
-      likely an obs derivation or masking issue)
+- [~] CESM2 overall score: **0.746** vs paper's ~0.81 (gap = 0.064)
+      Gap driven by `fs` (0.143), `rtfs` (0.269), `ep` (0.338) — seasonal/ENSO
+      correlations near-zero or negative for all three. Annual correlations are
+      now physically sensible (0.81, 0.92, 0.91). Likely cause: obs for these
+      variables are residuals from CERES + ERA5 and don't capture sub-annual
+      variability well; paper may use a different source.
+- [ ] Investigate `fs`/`rtfs`/`ep` sub-annual correlations further:
+      check sign conventions, obs source used in paper, masking.
 - [ ] Score CESM2-WACCM for side-by-side comparison
 - [ ] Expand to broader CMIP6 subset and compare rank ordering to Table 1
+- [ ] Consider aligning obs and model to common 2001-2014 overlap period
 
 ---
 
@@ -179,18 +194,23 @@ in `obs_fetcher.py`.
 
 ## Known Issues / Decisions
 
-- **`fs` correlation** (annual=0.13, seasonal=-0.11): needs investigation.
-  Likely causes: obs `fs` derived as residual from CERES + ERA5 at different
-  grids (now regridded to 1° before arithmetic, but sign conventions for
-  hfls/hfss need verification); or ocean-only masking mismatch.
-- **ENSO for fs/rtfs/ep**: obs files are time-mean 2D fields (no time dim),
-  so ENSO score is NaN by design for these variables. This is correct.
+- **`fs`/`rtfs`/`ep` sub-annual correlations**: annual R is now physically
+  reasonable (0.81, 0.92, 0.91) after fixing the hfls/hfss unit factor, but
+  seasonal and ENSO R are near-zero or negative. These obs are residuals; the
+  paper may use a different dataset or derivation for sub-annual validation.
+- **ENSO for fs/rtfs/ep**: obs files are 2D time-mean fields (derived from
+  time-mean components). The pipeline computes ENSO regression on them but the
+  time dimension is absent, so the result reflects obs structure at a single
+  snapshot rather than a proper regression — this is the proximate cause of the
+  near-zero ENSO correlations for these variables.
+- **`zg500` eddy**: FIXED. Zonal mean now removed from obs before correlation,
+  matching the model-side treatment in `calc_zg500()`. Score: 0.315 → 0.874.
+- **ERA5 `hfls`/`hfss` units**: FIXED. Factor was `-1/3600` (J/m²/hr → W/m²);
+  correct factor is `-1/86400` (J/m²/day → W/m²) for ERA5 monthly accumulations.
 - **`sfcWind`**: CMIP6 provides `sfcWind` (scalar speed); ERA5 obs derived
-  from u10/v10 magnitude — sign/convention should match but worth checking.
-- **Period mismatch**: model period 1995-2014; obs period 2001-2020.
-  Pattern correlations are spatial, so period mismatch affects the
-  climatological state being compared but not the correlation method itself.
-  A consistent 2001-2014 overlap period would be more rigorous.
+  from `si10` (10m wind speed, already scalar) — should match.
+- **Period mismatch**: model 1995-2014 vs obs 2001-2020. Spatial correlations
+  are robust to this, but a 2001-2014 overlap would be stricter.
 
 
 A Python port of the Climate Model Assessment Tool (CMAT v1) described in

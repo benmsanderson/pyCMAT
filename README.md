@@ -1,7 +1,7 @@
 # pyCMAT
 
 A Python port of the Climate Model Assessment Tool (CMAT) described in
-[Fasullo et al. (2020, GMD)][(https://doi.org/10.5194/gmd-13-3627-2020)](https://doi.org/10.5194/gmd-13-3627-2020).
+[Fasullo et al. (2020, GMD)](https://doi.org/10.5194/gmd-13-3627-2020).
 
 pyCMAT benchmarks climate model fidelity by computing area-weighted pattern
 correlations between model output and observational/reanalysis datasets across
@@ -20,6 +20,7 @@ comparable to published values in the paper.
 | CMIP6 disk cache | **Working** |
 | Observational reference data (26 files) | **Working** |
 | CLI: `score`, `fetch-obs`, `check-data` | **Working** |
+| CESM2 historical validated | **0.746 overall** (target ~0.81) |
 | Diagnostic plots | Not yet implemented |
 | HTML report output | Not yet implemented |
 | EOF/bias analysis | Not yet implemented |
@@ -109,9 +110,9 @@ Results are written to `<output>/scores.json`:
     ...
   },
   "scores": {
-    "variable": {"rsnt": 0.889, "rlut": 0.920, ...},
-    "realm":    {"energy": 0.78, "water": 0.82, "dynamics": 0.80},
-    "overall":  0.80
+    "variable": {"rsnt": 0.877, "rlut": 0.923, "zg500": 0.874, ...},
+    "realm":    {"energy": 0.658, "water": 0.734, "dynamics": 0.845},
+    "overall":  0.746
   },
   "metadata": {
     "model": "CESM2", "experiment": "historical",
@@ -120,7 +121,8 @@ Results are written to `<output>/scores.json`:
 }
 ```
 
-Target for CESM2 historical: overall score ~0.81 (Fasullo et al. 2020, Table 1).
+Current CESM2 historical result: **0.746 overall** (target ~0.81, Fasullo et al. 2020 Table 1).
+The gap is concentrated in `fs`, `rtfs`, and `ep` which have near-zero or negative seasonal/ENSO correlations — see Known Issues below.
 
 ---
 
@@ -208,6 +210,33 @@ python run_cmat.py fetch-obs --help
 - **EOF/bias analysis** (`src/eof_analysis.py`): bias PC decomposition
   analogous to Fig. 9 in Fasullo et al. (2020)
 - **`report` command**: aggregate multiple `scores.json` files into HTML
+
+---
+
+## Known Issues
+
+### Score gap vs Fasullo et al. 2020
+
+CESM2 historical scores 0.746 vs the paper's ~0.81. The gap is driven by
+three variables whose seasonal and/or ENSO correlations are near-zero or negative:
+
+| Variable | Annual R | Seasonal R | ENSO R | Score |
+|----------|----------|------------|--------|-------|
+| `fs`     | 0.805    | -0.213     | -0.170 | 0.143 |
+| `rtfs`   | 0.920    | -0.066     | -0.055 | 0.269 |
+| `ep`     | 0.913    | 0.060      | 0.034  | 0.338 |
+
+The annual correlations are now physically reasonable. The sub-annual
+correlations are likely poor because the obs for these variables are derived
+residuals (CERES surface radiation minus ERA5 turbulent fluxes), and the
+seasonal/ENSO signals in that residual do not match the model well. The paper
+may use a different obs source or a different derivation for these variables.
+
+### Period mismatch
+
+Model period 1995-2014 vs obs period 2001-2020. Pattern correlations are
+spatial so the mismatch affects the climatological state but not the
+correlation method. A 2001-2014 overlap period would be stricter.
 
 ---
 
