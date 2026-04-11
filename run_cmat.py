@@ -171,6 +171,14 @@ def score(
         benchmark_loader=benchmark_loader,
     )
 
+    # Attach run metadata so the report command can display it
+    results.setdefault("metadata", {})
+    results["metadata"]["run_label"]  = run_label
+    results["metadata"]["model"]      = model or run_label
+    results["metadata"]["experiment"] = experiment
+    results["metadata"]["member"]     = member
+    results["metadata"]["year_range"] = list(year_range)
+
     # Write scores.json
     with open(scores_file, "w") as fh:
         json.dump(results, fh, indent=2, default=_json_default)
@@ -227,18 +235,53 @@ def report(scores_dir, archive, output) -> None:
     log.info("Found %d model score files", len(score_files))
 
     # Load all scores
-    all_scores = {}
+    all_scores: dict = {}
     for f in score_files:
         model_name = f.parent.name
         with open(f) as fh:
             all_scores[model_name] = json.load(fh)
 
-    # Phase: generate color table summary plot  (src/plots.py)
-    # Phase: generate HTML index pages  (src/html_output.py)
+    log.info("Generating color table summary plots...")
+    sys.path.insert(0, str(Path(__file__).parent / "src"))
+    from src.plots import plot_colortable
+    from src.html_output import generate_index_pages
 
-    raise NotImplementedError(
-        "report command: plots and HTML generation not yet implemented"
+    sort_keys = [
+        ("overall",  "Overall"),
+        ("energy",   "Energy"),
+        ("water",    "Water"),
+        ("dynamics", "Dynamics"),
+        ("annual",   "Annual"),
+        ("seasonal", "Seasonal"),
+        ("enso",     "ENSO"),
+    ]
+    for sort_by, label in sort_keys:
+        img_path = output_path / f"colortable_summary_{sort_by}.png"
+        plot_colortable(
+            scores_dict=all_scores,
+            output_path=str(img_path),
+            sort_by=sort_by,
+            title=(
+                f"Model Performance Summary: Mean Pattern Correlation"
+                + (f" (sorted by {label})" if sort_by != "overall" else "")
+            ),
+        )
+        log.info("  Wrote %s", img_path.name)
+
+    log.info("Generating HTML index pages...")
+    written = generate_index_pages(
+        scores_dict=all_scores,
+        output_dir=output_path,
+        archive_label=archive,
+        image_dir=output_path,
     )
+    for p in written:
+        log.info("  Wrote %s", p.name)
+
+    click.echo(f"\nReport written to: {output_path}")
+    click.echo(f"  {len(sort_keys)} color table PNGs")
+    click.echo(f"  {len(written)} HTML index pages")
+    click.echo(f"  Open: {output_path / 'index.html'}")
 
 
 # ---------------------------------------------------------------------------

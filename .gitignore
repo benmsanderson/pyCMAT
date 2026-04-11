@@ -3,6 +3,9 @@ data/model_cache/
 data/obs/
 output/
 
+# Generated report output (plots and HTML pages)
+report/
+
 # Python artifacts
 __pycache__/
 *.py[cod]
