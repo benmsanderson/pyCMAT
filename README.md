@@ -10,27 +10,6 @@ comparable to published values in the paper.
 
 ---
 
-## Status
-
-| Component | Status |
-|-----------|--------|
-| Core scoring pipeline | **Working** |
-| Local NetCDF scoring | **Working** |
-| NorESM case scoring (raw h0 files) | **Working** |
-| CMIP6 GCS scoring (Pangeo) | **Working** |
-| CMIP6 disk cache | **Working** |
-| Observational reference data (26 files) | **Working** |
-| CLI: `score`, `fetch-obs`, `check-data`, `report` | **Working** |
-| CESM2 historical validated | **0.846 overall** (paper: 0.86) |
-| NorESM2-LM historical validated | **0.761 overall** (paper: 0.74, r2i1p1f1) |
-| Color table plots (7 PNGs) | **Working** |
-| HTML report output (7 pages) | **Working** |
-| Bias map plots | **Working** |
-| EOF/bias PC decomposition | Not yet implemented (needs ensemble of models) |
-| Score distribution whisker plots | Not yet implemented (needs ensemble of models) |
-
----
-
 ## Installation
 
 ```bash
@@ -40,16 +19,6 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
-> **On NIRD/Sigma2 HPC systems** the system Python may lack a working SSL
-> module, which breaks pip.  Use a Python that ships its own OpenSSL — for
-> example the conda-forge Python from an existing conda environment:
->
-> ```bash
-> /nird/home/$USER/.conda/envs/<env>/bin/python3 -m venv .venv
-> source .venv/bin/activate
-> pip install -r requirements.txt
-> ```
 
 ---
 
@@ -87,7 +56,7 @@ all 16 variables are present before scoring.
 ```bash
 python run_cmat.py score \
     --data-dir /path/to/model/output \
-    --obs-dir data/obs \
+    --obs-dir /projects/NS9188K/CMATobs \
     --output output/my_run
 ```
 
@@ -99,7 +68,7 @@ Add `--bias-maps` to generate annual-mean bias map PNGs alongside scores:
 ```bash
 python run_cmat.py score \
     --data-dir /path/to/model/output \
-    --obs-dir data/obs \
+    --obs-dir /projects/NS9188K/CMATobs \
     --output output/my_run \
     --bias-maps
 ```
@@ -115,7 +84,7 @@ derivations, and time-coordinate fix are all handled automatically.
 python run_cmat.py score \
     --noresm-case /projects/NS9560K/noresm/cases/MyCaseName \
     --year-start 1950 --year-end 1969 \
-    --obs-dir data/obs \
+    --obs-dir /projects/NS9188K/CMATobs \
     --output output/MyCaseName
 ```
 
@@ -127,7 +96,7 @@ python run_cmat.py score \
     --noresm-case /projects/NS9560K/noresm/cases/MyCaseName \
     --noresm-stream cam.h0 \
     --year-start 1950 --year-end 1969 \
-    --obs-dir data/obs --output output/MyCaseName
+    --obs-dir /projects/NS9188K/CMATobs --output output/MyCaseName
 ```
 
 Historical, piControl, and other experiment types all work — CMAT scores
@@ -141,11 +110,11 @@ to `data/model_cache/`. Re-runs load from disk.
 python run_cmat.py score \
     --data-dir /path/to/model/output \
     --benchmark-model CESM2 \
-    --obs-dir data/obs \
+    --obs-dir /projects/NS9188K/CMATobs \
     --output output/my_run_vs_cesm2
 ```
 
-### 5. Score a CMIP6 model directly
+### 5. Score a CMIP6 model directly (pull from Google/PanGEO CMIP6 mirror)
 
 ```bash
 python run_cmat.py score \
@@ -477,6 +446,26 @@ for cam_name, cmip6_name in cam_to_cmip6.items():
 
 ---
 
+
+## Status
+
+| Component | Status |
+|-----------|--------|
+| Core scoring pipeline | **Working** |
+| Local NetCDF scoring | **Working** |
+| NorESM case scoring (raw h0 files) | **Working** |
+| CMIP6 GCS scoring (Pangeo) | **Working** |
+| CMIP6 disk cache | **Working** |
+| Observational reference data (26 files) | **Working** |
+| CLI: `score`, `fetch-obs`, `check-data`, `report` | **Working** |
+| CESM2 historical validated | **0.846 overall** (paper: 0.86) |
+| NorESM2-LM historical validated | **0.761 overall** (paper: 0.74, r2i1p1f1) |
+| Color table plots (7 PNGs) | **Working** |
+| HTML report output (7 pages) | **Working** |
+| Bias map plots | **Working** |
+| EOF/bias PC decomposition | Not yet implemented (needs ensemble of models) |
+| Score distribution whisker plots | Not yet implemented (needs ensemble of models) |
+---
 ## Known Issues
 
 ### NorESM2-LM ensemble member
